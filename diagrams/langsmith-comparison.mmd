@@ -1,0 +1,7 @@
+flowchart LR
+    App[Application] --> Graph[LangGraph execution]
+    Graph --> LangSmith[LangSmith tracing and evaluation]
+    Graph --> Core[Provider-neutral artifacts]
+    Core --> Policy[Disclosure policy]
+    Policy --> Correlation[Approved IDs or summaries]
+    Correlation -. optional adapter .-> LangSmith

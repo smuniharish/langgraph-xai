@@ -1,0 +1,7 @@
+flowchart LR
+    Graph[LangGraph execution] --> Boundary[Supported boundary]
+    Boundary --> Runtime[Explicit runtime]
+    Runtime --> Canonical[Canonical artifacts]
+    Canonical --> Policy[Disclosure policy]
+    Policy --> Store[Storage or export]
+    Policy --> Explain[Explanation assembly]

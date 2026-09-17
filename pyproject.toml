@@ -1,0 +1,139 @@
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "langgraph-xai"
+version = "0.1.0"
+description = "A provider-neutral explainability layer for LangGraph applications."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+  { name = "S MUNI HARISH", email = "samamuniharish@gmail.com" },
+]
+keywords = ["langgraph", "explainable-ai", "xai", "provenance", "ai"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Typing :: Typed",
+]
+dependencies = [
+  "langchain-core>=1.6,<2",
+  "langgraph>=1.2.11,<1.3",
+  "pydantic>=2.12,<3",
+]
+
+[project.optional-dependencies]
+langsmith = ["langsmith>=0.4"]
+langfuse = ["langfuse>=4"]
+otel = [
+  "opentelemetry-api>=1.30",
+  "opentelemetry-sdk>=1.30",
+]
+postgres = [
+  "psycopg[binary,pool]>=3.2,<4",
+]
+llm-openai = ["langchain-openai>=1.1,<2"]
+all = [
+  "langfuse>=4",
+  "langchain-openai>=1.1,<2",
+  "langsmith>=0.4",
+  "opentelemetry-api>=1.30",
+  "opentelemetry-sdk>=1.30",
+  "psycopg[binary,pool]>=3.2,<4",
+]
+
+[project.urls]
+Documentation = "https://github.com/samamuniharish/langgraph-xai"
+Issues = "https://github.com/samamuniharish/langgraph-xai/issues"
+Repository = "https://github.com/samamuniharish/langgraph-xai"
+
+[dependency-groups]
+test = [
+  "pytest>=9",
+  "pytest-asyncio>=1.2",
+  "pytest-cov>=7",
+]
+lint = ["ruff>=0.16"]
+types = ["pyrefly>=1.3"]
+docs = [
+  "mkdocs>=1.6,<2",
+  "mkdocs-material>=9.7,<10",
+  "mkdocstrings[python]>=1.0,<2",
+]
+dev = [
+  { include-group = "test" },
+  { include-group = "lint" },
+  { include-group = "types" },
+]
+examples = [
+  "deepagents>=0.4",
+  "langchain-mcp-adapters>=0.3.2",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+  "integration: integration tests that may require optional dependencies",
+  "live: tests requiring explicitly configured external services",
+  "postgres: tests requiring XAI_TEST_POSTGRES_DSN",
+  "benchmark: performance regression tests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+  "A",
+  "ASYNC",
+  "B",
+  "C4",
+  "DTZ",
+  "E",
+  "F",
+  "I",
+  "N",
+  "PERF",
+  "PIE",
+  "PTH",
+  "RUF",
+  "S",
+  "SIM",
+  "T20",
+  "TC",
+  "UP",
+  "W",
+]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"examples/**/*.py" = ["T201"]
+"tests/**/*.py" = ["S101"]
+"src/langgraph_xai/instrumentation/graph.py" = ["A002"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.pyrefly]
+project-includes = ["src", "tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["langgraph_xai"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

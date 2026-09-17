@@ -1,0 +1,6 @@
+flowchart LR
+    Event[Execution event] --> Link[Provenance link]
+    Source[Approved source] --> Link
+    Version[Source or rule version] --> Link
+    Link --> Artifact[Canonical artifact]
+    Artifact --> Resolver[Reference resolver]

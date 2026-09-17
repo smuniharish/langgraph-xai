@@ -1,0 +1,7 @@
+flowchart TD
+    Execution[Execution] --> Decision[Decision]
+    Evidence[Evidence references] --> Decision
+    Rule[Method or rule version] --> Decision
+    Decision --> Attribution[Qualified attribution]
+    Decision --> Explanation[Policy-filtered explanation]
+    Attribution --> Explanation

@@ -1,0 +1,9 @@
+flowchart TD
+    Runtime[Runtime] --> Policy[Policy plugin]
+    Runtime --> Store[Storage plugin]
+    Runtime --> Telemetry[Telemetry plugin]
+    Runtime --> Model[Optional model plugin]
+    Policy --> Approved[Policy-approved artifacts]
+    Approved --> Store
+    Approved --> Telemetry
+    Approved --> Model

@@ -1,0 +1,7 @@
+flowchart LR
+    Capture[Capture] --> Policy1[Policy]
+    Policy1 --> Canonical[Canonical artifacts]
+    Canonical --> Policy2[Policy]
+    Policy2 --> Storage[Storage]
+    Storage --> Policy3[Policy]
+    Policy3 --> Export[Export or render]

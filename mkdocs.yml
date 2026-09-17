@@ -1,0 +1,114 @@
+site_name: langgraph-xai
+site_description: Provider-neutral explainability for LangGraph applications
+site_url: https://samamuniharish.github.io/langgraph-xai/
+repo_name: samamuniharish/langgraph-xai
+repo_url: https://github.com/samamuniharish/langgraph-xai
+edit_uri: edit/main/docs/
+
+watch:
+  - src
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.sections
+    - search.suggest
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            merge_init_into_class: true
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            members_order: source
+            heading_level: 3
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quickstart: getting-started/quickstart.md
+      - Configuration constraints: getting-started/configuration.md
+  - Concepts:
+      - Overview: concepts/index.md
+      - Execution: concepts/execution.md
+      - Provenance: concepts/provenance.md
+      - Evidence: concepts/evidence.md
+      - Decisions: concepts/decisions.md
+      - Attribution: concepts/attribution.md
+      - Explanations: concepts/explanations.md
+      - Policies: concepts/policies.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Decisions (ADRs): architecture/decisions.md
+      - Runtime: architecture/runtime.md
+      - Canonical model: architecture/canonical-model.md
+      - Provenance: architecture/provenance.md
+      - Plugins: architecture/plugins.md
+      - Observability: architecture/observability.md
+      - Storage: architecture/storage.md
+      - Concurrency: architecture/concurrency.md
+      - Failure handling: architecture/failure.md
+      - Artifacts: architecture/artifacts.md
+      - Disclosure policy: architecture/disclosure-policy.md
+  - Integrations:
+      - Overview: integrations/index.md
+      - LangGraph: integrations/langgraph.md
+      - LangSmith: integrations/langsmith.md
+      - LangSmith comparison: integrations/langsmith-vs-langgraph-xai.md
+      - Langfuse: integrations/langfuse.md
+      - OpenTelemetry: integrations/opentelemetry.md
+  - How-to guides:
+      - Overview: how-to/index.md
+      - Handle human-in-the-loop interrupts: how-to/interrupts.md
+      - Integrate MCP tools: how-to/mcp-tools.md
+      - Run multi-agent graphs with correlation: how-to/multi-agent.md
+      - Test disclosure policies: how-to/disclosure-policies.md
+      - Enable live LLM explanations: how-to/llm-explanations.md
+      - Configure failure modes: how-to/failure-modes.md
+  - Examples:
+      - Overview: examples/index.md
+      - Minimal graph: examples/minimal-graph.md
+      - Full explanation output: examples/full-explanation.md
+      - Disclosure-policy matrix: examples/disclosure-matrix.md
+      - Human-in-the-loop interrupts: examples/interrupt-hitl.md
+      - MCP tools (Playwright): examples/mcp-tools.md
+      - deepagents: examples/deepagents.md
+      - Multi-agent correlation and retries: examples/multi-agent-retry.md
+      - Policy-filtered export: examples/policy-export.md
+  - API:
+      - Overview: api/index.md
+      - Configuration: api/config.md
+      - Runtime: api/runtime.md
+      - Canonical models: api/models.md
+      - Protocols: api/protocols.md
+      - Storage: api/storage.md
+      - Observability: api/observability.md
+      - Explanation engines: api/explanation.md
+      - Attribution engines: api/attribution.md
+      - Policy providers: api/policy.md
+  - Operations:
+      - Configuration: operations/configuration.md
+      - Security: operations/security.md
+      - Troubleshooting: operations/troubleshooting.md
+  - Development:
+      - Contributing: development/contributing.md
+      - Testing and live evaluation: development/testing.md

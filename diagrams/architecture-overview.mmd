@@ -1,0 +1,8 @@
+flowchart LR
+    App[LangGraph application] --> Runtime[langgraph-xai runtime]
+    Runtime --> Artifacts[Structured artifacts]
+    Policy[Disclosure policy] --> Runtime
+    Policy --> Artifacts
+    Artifacts --> Explain[Explanation assembly]
+    Runtime -. optional .-> Integrations[LangSmith / Langfuse / OpenTelemetry]
+    Artifacts -. optional .-> Storage[Persistence adapter]

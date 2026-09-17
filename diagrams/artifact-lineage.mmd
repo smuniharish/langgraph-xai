@@ -1,0 +1,8 @@
+flowchart TD
+    Execution[Execution] --> Provenance[Provenance]
+    Execution --> Decision[Decision]
+    Evidence[Evidence reference] --> Decision
+    Decision --> Attribution[Attribution]
+    Provenance --> Explanation[Explanation]
+    Decision --> Explanation
+    Attribution --> Explanation

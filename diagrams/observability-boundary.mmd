@@ -1,0 +1,7 @@
+flowchart LR
+    Execution[Graph execution] --> Runtime[Runtime]
+    Runtime --> Artifacts[Canonical artifacts]
+    Runtime -. correlation IDs .-> Trace[Trace or span context]
+    Artifacts --> Policy[Disclosure policy]
+    Policy --> Export[Opt-in telemetry export]
+    Trace --> Export
