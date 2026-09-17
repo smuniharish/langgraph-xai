@@ -84,6 +84,7 @@ nav:
       - Test disclosure policies: how-to/disclosure-policies.md
       - Enable live LLM explanations: how-to/llm-explanations.md
       - Configure failure modes: how-to/failure-modes.md
+      - Explain a decision after the run finishes: how-to/explain-after-run.md
   - Examples:
       - Overview: examples/index.md
       - Minimal graph: examples/minimal-graph.md

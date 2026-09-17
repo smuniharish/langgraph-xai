@@ -23,3 +23,6 @@ instead.
 - [Configure failure modes](failure-modes.md) — choose between
   `fail_open`, `fail_closed`, and `strict` for xgraph's own instrumentation
   failures.
+- [Explain a decision after the run finishes](explain-after-run.md) — keep
+  a handle on the `Run` so you can record a decision and explain it from
+  your own application code, not just from inside a graph node.

@@ -19,12 +19,15 @@ observability, attribution, explanation, policy) already has a working
 in-memory or no-op default. See [Configuration](../api/config.md) for every
 constructor parameter and when to change it.
 
-## Instrument and run your graph
+## Instrument, run, record a decision, and explain it
 
 ```python
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
+
+from langgraph_xai import DecisionFactor
+from langgraph_xai.core import ExplanationContext
 
 
 class State(TypedDict, total=False):
@@ -32,8 +35,24 @@ class State(TypedDict, total=False):
     answer: str
 
 
-def answer(state: dict) -> dict:
-    return {"answer": f"Echo: {state['query']}"}
+async def answer(state: dict) -> dict:
+    # Record *why*, from inside the node that made the call. No canonical
+    # model is built by hand: record_decision() constructs and persists a
+    # Decision for you, and runtime.current_run.execution is the live
+    # Execution for the run already in progress.
+    decision = await runtime.record_decision(
+        "FINAL_RESPONSE",
+        decision_type="routing",
+        factors=[DecisionFactor(name="answer_available", value=True)],
+    )
+    explanation = await runtime.explain(
+        ExplanationContext(
+            execution=runtime.current_run.execution,
+            decision=decision,
+            audience="end_user",
+        )
+    )
+    return {"answer": f"Echo: {state['query']}", "explanation": explanation.summary}
 
 
 builder = StateGraph(State)
@@ -44,45 +63,24 @@ graph = builder.compile()
 
 instrumented = runtime.instrument(graph)
 result = await instrumented.ainvoke({"query": "Why?"})
+print(result["answer"], "|", result["explanation"])
 ```
 
 `instrument(...)` wraps `invoke`/`ainvoke`/`stream`/`astream`/`batch`/
 `abatch` transparently — your graph's inputs and outputs are unchanged;
 execution, tool-call, and state-transition records are captured alongside.
-
-## Record a decision and explain it
-
-Instrumentation captures *what ran*. Your application still records *why* a
-decision was made — build an `Execution`/`Decision` pair from the same
-context and pass both to `explain(...)`:
-
-```python
-from datetime import UTC, datetime
-from langgraph_xai import DecisionFactor
-from langgraph_xai.core import Decision, Execution, ExecutionStatus, ExplanationContext
-
-context = runtime.context_from_config()
-execution = Execution(
-    context=context, status=ExecutionStatus.COMPLETED, started_at=datetime.now(UTC)
-)
-decision = Decision(
-    context=context,
-    decision_type="routing",
-    selected_action="FINAL_RESPONSE",
-    factors=[DecisionFactor(name="answer_available", value=True)],
-)
-explanation = await runtime.explain(
-    ExplanationContext(execution=execution, decision=decision, audience="end_user")
-)
-print(result)
-print(explanation.summary)
-```
+`runtime.current_run` is only set *while* an
+instrumented call is in flight, which is exactly why the decision and
+explanation are recorded from inside the node rather than after
+`ainvoke` returns — see
+[How-to: explain a decision after the run finishes](../how-to/explain-after-run.md)
+for the pattern to use instead when you need to explain a decision made
+outside any node (e.g. in a web handler, after the graph call returns).
 
 Real captured output, running this exact flow:
 
 ```text
-{'query': 'Why?', 'answer': 'Echo: Why?'}
-The end_user explanation is based on the selected action 'FINAL_RESPONSE'.
+Echo: Why? | The end_user explanation is based on the selected action 'FINAL_RESPONSE'.
 ```
 
 The same pattern, wired through a real compiled graph, lives in
@@ -90,14 +88,28 @@ The same pattern, wired through a real compiled graph, lives in
 
 ```bash
 $ uv run python examples/minimal_langgraph.py
-{'query': 'Why?', 'answer': 'Echo: Why?'}
-The end_user explanation is based on the selected action 'FINAL_RESPONSE'.
+Echo: Why? | The end_user explanation is based on the selected action 'FINAL_RESPONSE'.
 ```
 
 This explanation was assembled by the built-in `StructuredExplanationEngine`
 — deterministic, free, and enabled by default. See
 [Concepts: Explanations](../concepts/explanations.md) for the full JSON
 shape and how the same decision renders differently per audience.
+
+!!! note "Do I ever construct `Execution`, `Decision`, `Evidence`, or `ProvenanceLink` by hand?"
+    Rarely, in application code. `runtime.record_decision(...)`,
+    `record_evidence(...)`, and `record_provenance(...)` already build and
+    persist those canonical models for you from plain arguments — and
+    `runtime.current_run.execution` gives you the live `Execution` for
+    free. The one object you *do* still assemble yourself is
+    `ExplanationContext` — it is not a recorded artifact but the request
+    "explain this decision, for this audience" — and it is a thin
+    reference wrapper, not data you re-derive. The
+    [canonical model gallery](https://github.com/samamuniharish/langgraph-xai/blob/main/examples/canonical_model_gallery.py)
+    behind the JSON on every [Concepts](../concepts/index.md) page
+    constructs every model directly and by hand instead, on purpose: it
+    exists to show the exact shape of each model in isolation, not to
+    demonstrate idiomatic application code.
 
 ## Optional: phrase the explanation with a live LLM
 
@@ -115,8 +127,12 @@ model = langchain_openai.ChatOpenAI(model="gpt-5.6-luna", base_url="...", api_ke
 runtime = XAIRuntime(graph_id="fraud-review", config=XAIConfig(llm_explanation_enabled=True))
 runtime.register(ExplanationEngine, LLMExplanationEngine(model, enabled=True, timeout=30.0))
 
+# Same call as above — swapping the registered ExplanationEngine is the
+# only change; runtime.current_run.execution and decision are unchanged.
 explanation = await runtime.explain(
-    ExplanationContext(execution=execution, decision=decision, audience="end_user")
+    ExplanationContext(
+        execution=runtime.current_run.execution, decision=decision, audience="end_user"
+    )
 )
 ```
 
