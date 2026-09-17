@@ -115,7 +115,9 @@ shape and how the same decision renders differently per audience.
 
 `llm_explanation_enabled` is `False` by default, so `runtime.explain(...)`
 never calls a model unless you deliberately opt in and register an engine
-that wraps one:
+that wraps one. This is the exact same flow as above — the same node,
+the same `record_decision`/`explain` calls — with only the runtime
+construction and the registered `ExplanationEngine` changed:
 
 ```python
 import langchain_openai
@@ -123,48 +125,34 @@ from langgraph_xai import XAIConfig
 from langgraph_xai.core.protocols import ExplanationEngine
 from langgraph_xai.explanation import LLMExplanationEngine
 
-model = langchain_openai.ChatOpenAI(model="gpt-5.6-luna", base_url="...", api_key="...")
+model = langchain_openai.ChatOpenAI(
+    model="gpt-5.6-luna", base_url="https://api.experientiallabs.ai/v1", api_key="..."
+)
 runtime = XAIRuntime(graph_id="fraud-review", config=XAIConfig(llm_explanation_enabled=True))
 runtime.register(ExplanationEngine, LLMExplanationEngine(model, enabled=True, timeout=30.0))
 
-# Same call as above — swapping the registered ExplanationEngine is the
-# only change; runtime.current_run.execution and decision are unchanged.
-explanation = await runtime.explain(
-    ExplanationContext(
-        execution=runtime.current_run.execution, decision=decision, audience="end_user"
-    )
-)
+# `answer`, `builder`, and `graph` are unchanged from the section above.
+instrumented = runtime.instrument(graph)
+result = await instrumented.ainvoke({"query": "Why?"})
+print(result["answer"], "|", result["explanation"])
 ```
 
 Real captured output, one real call against an OpenAI-compatible model
-(`gpt-5.6-luna`), for a `HUMAN_REVIEW` decision with one factor
-(`fraud_risk_score=0.91`):
+(`gpt-5.6-luna`), running this exact flow end to end:
 
-```json
-{
-  "audience": "end_user",
-  "summary": "This case has been selected for human review.",
-  "reasons": ["The fraud risk score is 0.91."],
-  "contributing_factors": [
-    {
-      "factor_id": "fraud_risk_score",
-      "score": 1.0,
-      "label": "fraud_risk_score",
-      "rationale": "Rule score for factor 'fraud_risk_score'."
-    }
-  ],
-  "disclosure": ["Private memory and raw content are withheld by default."],
-  "metadata": {"engine": "llm", "validated": true}
-}
+```text
+Echo: Why? | An answer is available.
 ```
 
 The model only ever receives already-captured, policy-filtered facts
 (selected action, factors, evidence) — never a raw prompt or private model
 reasoning — and its output is parsed against a strict schema that rejects
-any field it wasn't asked for. See
-[How to enable live LLM explanations](../how-to/llm-explanations.md) for the
-full safety-interlock details, failure handling, and a real disclosure-policy
-permutation matrix run against this same model.
+any field it wasn't asked for. For a higher-stakes decision (a
+`HUMAN_REVIEW` outcome with a `fraud_risk_score` factor) and the full,
+real JSON `Explanation` this engine returns, see
+[How to enable live LLM explanations](../how-to/llm-explanations.md) — it
+also covers the safety-interlock details, failure handling, and a real
+disclosure-policy permutation matrix run against this same model.
 
 ## What this flow deliberately does not do
 

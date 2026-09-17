@@ -42,6 +42,57 @@ boundary protects you from a model hallucinating fields you didn't ask for.
    exception), while `fail_closed`/`strict` propagate an
    `XAIInstrumentationError`.
 
+## Full worked example
+
+Real output from one live call against `gpt-5.6-luna`, for a `HUMAN_REVIEW`
+decision with one factor (`fraud_risk_score=0.91`):
+
+```python
+from datetime import UTC, datetime
+
+from langgraph_xai import DecisionFactor
+from langgraph_xai.core import Decision, Execution, ExecutionStatus, ExplanationContext
+
+context = runtime.context_from_config()
+execution = Execution(
+    context=context, status=ExecutionStatus.COMPLETED, started_at=datetime.now(UTC)
+)
+decision = Decision(
+    context=context,
+    decision_type="routing",
+    selected_action="HUMAN_REVIEW",
+    factors=[DecisionFactor(name="fraud_risk_score", value=0.91)],
+)
+explanation = await runtime.explain(
+    ExplanationContext(execution=execution, decision=decision, audience="end_user")
+)
+```
+
+```json
+{
+  "audience": "end_user",
+  "summary": "Your case has been referred for human review.",
+  "reasons": ["The fraud risk score is 0.91."],
+  "contributing_factors": [
+    {
+      "factor_id": "fraud_risk_score",
+      "score": 1.0,
+      "label": "fraud_risk_score",
+      "rationale": "Rule score for factor 'fraud_risk_score'."
+    }
+  ],
+  "disclosure": ["Private memory and raw content are withheld by default."],
+  "metadata": {"engine": "llm", "validated": true}
+}
+```
+
+The `summary` and `reasons` text is genuinely produced by the model each
+call — expect close paraphrases, not byte-identical output, across runs.
+This example builds `Execution`/`Decision` directly rather than through
+`runtime.record_decision(...)` because it's evaluated standalone, outside
+any graph run; see [Quickstart](../getting-started/quickstart.md) for the
+idiomatic, in-graph-node version of this same call.
+
 ## Real evidence this boundary actually holds
 
 - `tests/explanation/test_engines.py::test_llm_explanation_still_rejects_unknown_fields`
