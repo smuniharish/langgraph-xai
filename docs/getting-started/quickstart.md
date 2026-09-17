@@ -19,76 +19,121 @@ observability, attribution, explanation, policy) already has a working
 in-memory or no-op default. See [Configuration](../api/config.md) for every
 constructor parameter and when to change it.
 
-## Instrument, run, record a decision, and explain it
+## Build a real agent, record its decision, and explain it
+
+Most real LangGraph applications are built with
+[`langchain.agents.create_agent`](https://python.langchain.com/docs/how_to/agent_executor/)
+rather than a hand-written `StateGraph` — it still compiles to an ordinary
+LangGraph runnable, so `runtime.instrument(...)` needs no special-casing
+for it. The one design choice worth being deliberate about is *where* to
+hook in a decision: `create_agent` accepts `AgentMiddleware`, and its
+`aafter_model` hook fires once per model turn — exactly where you can
+distinguish "the model just chose to call a tool" from "the model produced
+a final answer," which is the point at which you want to record a
+`Decision` and explain it.
 
 ```python
-from typing import TypedDict
+from typing import Any
 
-from langgraph.graph import END, START, StateGraph
+from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware
+from langchain.tools import tool
+from langchain_openai import ChatOpenAI
 
-from langgraph_xai import DecisionFactor
+from langgraph_xai import Decision, DecisionFactor
 from langgraph_xai.core import ExplanationContext
 
 
-class State(TypedDict, total=False):
-    query: str
-    answer: str
+@tool
+def check_fraud_risk(transaction_id: str, amount: float) -> str:
+    """Look up the fraud risk score for a transaction."""
+    return "0.91" if amount > 5000 else "0.12"
 
 
-async def answer(state: dict) -> dict:
-    # Record *why*, from inside the node that made the call. No canonical
-    # model is built by hand: record_decision() constructs and persists a
-    # Decision for you, and runtime.current_run.execution is the live
-    # Execution for the run already in progress.
-    decision = await runtime.record_decision(
-        "FINAL_RESPONSE",
-        decision_type="routing",
-        factors=[DecisionFactor(name="answer_available", value=True)],
-    )
-    explanation = await runtime.explain(
-        ExplanationContext(
-            execution=runtime.current_run.execution,
-            decision=decision,
-            audience="end_user",
+class DecisionRecordingMiddleware(AgentMiddleware):
+    """Records the agent's final answer as a Decision and explains it.
+
+    Runs after every model turn; skips turns where the model is still
+    calling a tool, and only records/explains once it produces a final
+    answer with no further tool calls.
+    """
+
+    def __init__(self, xai_runtime) -> None:
+        super().__init__()
+        # Store the XAIRuntime under its own name, not "runtime": LangGraph
+        # injects its own Runtime context object as aafter_model's second
+        # parameter, under that exact name, and would silently shadow it.
+        self.xai_runtime = xai_runtime
+        self.decision: Decision | None = None
+        self.explanation_summary: str | None = None
+
+    async def aafter_model(self, state: dict[str, Any], runtime: Any) -> None:
+        last_message = state["messages"][-1]
+        if getattr(last_message, "tool_calls", None):
+            return None  # still calling a tool; not a final decision yet
+
+        self.decision = await self.xai_runtime.record_decision(
+            "FINAL_RESPONSE",
+            decision_type="final_response",
+            factors=[DecisionFactor(name="answer_available", value=True)],
         )
-    )
-    return {"answer": f"Echo: {state['query']}", "explanation": explanation.summary}
+        explanation = await self.xai_runtime.explain(
+            ExplanationContext(
+                execution=self.xai_runtime.current_run.execution,
+                decision=self.decision,
+                audience="end_user",
+            )
+        )
+        self.explanation_summary = explanation.summary
+        return None
 
 
-builder = StateGraph(State)
-builder.add_node("answer", answer)
-builder.add_edge(START, "answer")
-builder.add_edge("answer", END)
-graph = builder.compile()
+model = ChatOpenAI(base_url="...", api_key="...", model="gpt-5.6-luna")
+middleware = DecisionRecordingMiddleware(runtime)
+agent = create_agent(
+    model,
+    tools=[check_fraud_risk],
+    system_prompt="You are a fraud review assistant. Use the tool, then answer briefly.",
+    middleware=[middleware],
+)
 
-instrumented = runtime.instrument(graph)
-result = await instrumented.ainvoke({"query": "Why?"})
-print(result["answer"], "|", result["explanation"])
+instrumented = runtime.instrument(agent)
+result = await instrumented.ainvoke(
+    {"messages": [{"role": "user", "content": "Transaction txn-8841 is $9200. Is it risky?"}]}
+)
+print(middleware.decision.selected_action, "|", middleware.explanation_summary)
 ```
 
 `instrument(...)` wraps `invoke`/`ainvoke`/`stream`/`astream`/`batch`/
-`abatch` transparently — your graph's inputs and outputs are unchanged;
-execution, tool-call, and state-transition records are captured alongside.
-`runtime.current_run` is only set *while* an
-instrumented call is in flight, which is exactly why the decision and
-explanation are recorded from inside the node rather than after
-`ainvoke` returns — see
+`abatch` transparently — your agent's inputs and outputs are unchanged;
+every tool call the agent makes (`check_fraud_risk` here) is captured as a
+`ToolExecution` alongside the `Decision` the middleware records. `runtime.current_run`
+is only set *while* an instrumented call is in flight, which is exactly why
+the decision and explanation are recorded from inside the middleware hook
+rather than after `ainvoke` returns — see
 [How-to: explain a decision after the run finishes](../how-to/explain-after-run.md)
-for the pattern to use instead when you need to explain a decision made
-outside any node (e.g. in a web handler, after the graph call returns).
+for the pattern to use instead when a decision is only known *after* the
+agent call returns (e.g. in a web handler, not inside any hook).
 
-Real captured output, running this exact flow:
-
-```text
-Echo: Why? | The end_user explanation is based on the selected action 'FINAL_RESPONSE'.
-```
-
-The same pattern, wired through a real compiled graph, lives in
-[`examples/minimal_langgraph.py`](https://github.com/samamuniharish/langgraph-xai/blob/main/examples/minimal_langgraph.py):
+The full runnable version of this script, including verification
+assertions, lives in
+[`examples/create_agent_decision_explanation.py`](https://github.com/samamuniharish/langgraph-xai/blob/main/examples/create_agent_decision_explanation.py).
+Real captured output from running it (the agent's own free-text reply is
+model-generated and will vary in wording across calls; `selected_action`
+and `explanation` are what xgraph itself records and reproduces exactly):
 
 ```bash
-$ uv run python examples/minimal_langgraph.py
-Echo: Why? | The end_user explanation is based on the selected action 'FINAL_RESPONSE'.
+$ uv run --system-certs python examples/create_agent_decision_explanation.py
+--- Final agent message ---
+Yes, this transaction is high risk, with a fraud risk score of 0.91.
+
+--- Recorded decision + explanation ---
+selected_action: FINAL_RESPONSE
+explanation: The end_user explanation is based on the selected action 'FINAL_RESPONSE'.
+
+Verified: the Decision and Explanation were produced from inside
+create_agent's own after-model hook, with no canonical model built by hand
+in application code.
 ```
 
 This explanation was assembled by the built-in `StructuredExplanationEngine`
@@ -115,40 +160,45 @@ shape and how the same decision renders differently per audience.
 
 `llm_explanation_enabled` is `False` by default, so `runtime.explain(...)`
 never calls a model unless you deliberately opt in and register an engine
-that wraps one. This is the exact same flow as above — the same node,
-the same `record_decision`/`explain` calls — with only the runtime
-construction and the registered `ExplanationEngine` changed:
+that wraps one. This is the exact same agent as above — the same tool,
+the same middleware, the same `record_decision`/`explain` calls — with
+only the runtime construction and the registered `ExplanationEngine`
+changed:
 
 ```python
-import langchain_openai
 from langgraph_xai import XAIConfig
 from langgraph_xai.core.protocols import ExplanationEngine
 from langgraph_xai.explanation import LLMExplanationEngine
 
-model = langchain_openai.ChatOpenAI(
-    model="gpt-5.6-luna", base_url="https://api.experientiallabs.ai/v1", api_key="..."
-)
 runtime = XAIRuntime(graph_id="fraud-review", config=XAIConfig(llm_explanation_enabled=True))
 runtime.register(ExplanationEngine, LLMExplanationEngine(model, enabled=True, timeout=30.0))
 
-# `answer`, `builder`, and `graph` are unchanged from the section above.
-instrumented = runtime.instrument(graph)
-result = await instrumented.ainvoke({"query": "Why?"})
-print(result["answer"], "|", result["explanation"])
+# `check_fraud_risk`, `DecisionRecordingMiddleware`, `model`, and `agent`
+# construction are unchanged from the section above.
+middleware = DecisionRecordingMiddleware(runtime)
+agent = create_agent(model, tools=[check_fraud_risk], middleware=[middleware])
+instrumented = runtime.instrument(agent)
+result = await instrumented.ainvoke(
+    {"messages": [{"role": "user", "content": "Transaction txn-8841 is $9200. Is it risky?"}]}
+)
+print(middleware.decision.selected_action, "|", middleware.explanation_summary)
 ```
 
 Real captured output, one real call against an OpenAI-compatible model
 (`gpt-5.6-luna`), running this exact flow end to end:
 
 ```text
-Echo: Why? | An answer is available.
+FINAL_RESPONSE | An answer is available.
 ```
 
-The model only ever receives already-captured, policy-filtered facts
-(selected action, factors, evidence) — never a raw prompt or private model
-reasoning — and its output is parsed against a strict schema that rejects
-any field it wasn't asked for. For a higher-stakes decision (a
-`HUMAN_REVIEW` outcome with a `fraud_risk_score` factor) and the full,
+This scenario's only `Decision` factor is `answer_available=True` — the
+LLM engine phrases *exactly* the facts it is given, so a decision with a
+richer factor set (a `fraud_risk_score` alongside a `review_threshold`)
+produces a correspondingly richer sentence. The model only ever receives
+already-captured, policy-filtered facts (selected action, factors,
+evidence) — never a raw prompt or private model reasoning — and its
+output is parsed against a strict schema that rejects any field it wasn't
+asked for. For that richer, `HUMAN_REVIEW`-outcome variant and the full,
 real JSON `Explanation` this engine returns, see
 [How to enable live LLM explanations](../how-to/llm-explanations.md) — it
 also covers the safety-interlock details, failure handling, and a real
@@ -172,4 +222,7 @@ disclosure-policy permutation matrix run against this same model.
   worked example of its effect.
 - [How-to guides](../how-to/index.md) — interrupts, MCP tools, multi-agent
   correlation, disclosure policies, failure modes.
+- [create_agent nested inside a StateGraph node](../examples/create-agent-nested.md)
+  — the same pattern as above, one step deeper: an LLM agent built and
+  invoked *inside* a plain node of a larger hand-written graph.
 

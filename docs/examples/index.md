@@ -9,6 +9,9 @@ LLM call, noted per page).
 
 - [Minimal graph](minimal-graph.md) — the smallest possible instrumented
   graph.
+- [create_agent nested inside a StateGraph node](create-agent-nested.md) — an
+  LLM agent one step inside a larger hand-written graph, correlated onto the
+  same run automatically.
 - [Full explanation output](full-explanation.md) — the complete, real
   `Explanation` JSON for a banking decision.
 - [Disclosure-policy matrix](disclosure-matrix.md) — 16 real permutations of

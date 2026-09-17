@@ -88,6 +88,7 @@ nav:
   - Examples:
       - Overview: examples/index.md
       - Minimal graph: examples/minimal-graph.md
+      - create_agent nested inside a StateGraph node: examples/create-agent-nested.md
       - Full explanation output: examples/full-explanation.md
       - Disclosure-policy matrix: examples/disclosure-matrix.md
       - Human-in-the-loop interrupts: examples/interrupt-hitl.md
