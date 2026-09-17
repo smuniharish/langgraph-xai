@@ -1,5 +1,10 @@
 # langgraph-xai
 
+[![CI](https://github.com/samamuniharish/langgraph-xai/actions/workflows/ci.yml/badge.svg)](https://github.com/samamuniharish/langgraph-xai/actions/workflows/ci.yml)
+[![Docs](https://github.com/samamuniharish/langgraph-xai/actions/workflows/docs.yml/badge.svg)](https://samamuniharish.github.io/langgraph-xai/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
+
 `langgraph-xai` is a provider-neutral explainability layer for LangGraph
 applications. It turns observable graph execution into structured execution,
 provenance, evidence, decisions, attribution, policy-aware disclosure, and
