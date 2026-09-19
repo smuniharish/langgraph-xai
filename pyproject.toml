@@ -40,6 +40,11 @@ postgres = [
   "psycopg[binary,pool]>=3.2,<4",
 ]
 llm-openai = ["langchain-openai>=1.1,<2"]
+docs = [
+  "mkdocs>=1.6,<2",
+  "mkdocs-material>=9.7,<10",
+  "mkdocstrings[python]>=1.0,<2",
+]
 all = [
   "langfuse>=4",
   "langchain-openai>=1.1,<2",
