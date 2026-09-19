@@ -50,9 +50,9 @@ all = [
 ]
 
 [project.urls]
-Documentation = "https://github.com/samamuniharish/langgraph-xai"
-Issues = "https://github.com/samamuniharish/langgraph-xai/issues"
-Repository = "https://github.com/samamuniharish/langgraph-xai"
+Documentation = "https://github.com/smuniharish/langgraph-xai"
+Issues = "https://github.com/smuniharish/langgraph-xai/issues"
+Repository = "https://github.com/smuniharish/langgraph-xai"
 
 [dependency-groups]
 test = [
