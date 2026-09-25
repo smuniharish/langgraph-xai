@@ -42,6 +42,7 @@ side-by-side detail: [LangSmith comparison](integrations/langsmith-vs-langgraph-
 
 - [Quickstart](getting-started/quickstart.md)
 - [Concepts](concepts/index.md)
+- [Agent Skills](agent-skills.md)
 - [Architecture overview](architecture/overview.md)
 - [Architecture decisions (ADRs)](architecture/decisions.md)
 - [Disclosure policy](architecture/disclosure-policy.md)
@@ -63,4 +64,3 @@ real `deepagents` deep agent, and a real LLM-backed explanation engine (see
 of which embed the actual captured output from those real runs). The
 documentation distinguishes implemented behavior from planned capabilities
 throughout.
-

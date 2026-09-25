@@ -47,6 +47,7 @@ nav:
   - Getting started:
       - Quickstart: getting-started/quickstart.md
       - Configuration constraints: getting-started/configuration.md
+      - Agent Skills: agent-skills.md
   - Concepts:
       - Overview: concepts/index.md
       - Execution: concepts/execution.md
