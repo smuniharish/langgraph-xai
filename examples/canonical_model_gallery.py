@@ -1,10 +1,9 @@
-"""Produce real, runnable JSON examples of every canonical xgraph model.
+"""Print a real JSON example of every canonical model, all from one recorded run.
 
-This script is the single source of truth for the JSON snippets quoted on
-each ``docs/concepts/*.md`` page: Execution, Provenance, Evidence, Decision,
-Attribution, Policy, and Explanation. Every payload below is produced by
-actually constructing and (where applicable) running the real component --
-none of it is hand-written for presentation.
+The concept pages of the documentation quote this script's output: an `Execution`,
+`Evidence`, a `Decision`, a provenance lineage, an `AttributionResult`, a
+`PolicyDecision`, and an `Explanation`. Everything is produced through the public
+recording API rather than built by hand.
 
 Run with:
 
@@ -12,168 +11,112 @@ Run with:
 """
 
 import asyncio
-from datetime import UTC, datetime
-
-from _shared import compiled_graph
 
 from langgraph_xai import (
-    AttributionEngine,
-    Decision,
+    Audience,
     DecisionFactor,
-    Evidence,
+    DecisionType,
     EvidenceType,
-    Execution,
-    ExecutionStatus,
     ExplanationContext,
-    HybridAttribution,
+    PolicyAction,
     PolicyProvider,
-    ProvenanceLink,
     ProvenanceStore,
+    ToolStatus,
     XAIRuntime,
 )
-from langgraph_xai.core import PolicyAction
-from langgraph_xai.storage import InMemoryProvenanceStore
+
+CONTEXT_FIELDS = {"context"}
 
 
-def _banner(title: str) -> None:
-    print(f"\n{'=' * 10} {title} {'=' * 10}")
+def banner(title: str) -> None:
+    print(f"\n========== {title} ==========")
 
 
 async def main() -> None:
-    store = InMemoryProvenanceStore()
-    runtime = XAIRuntime(graph_id="fraud-review")
-    runtime.register(ProvenanceStore, store)
+    xai = XAIRuntime(application_id="payments", tenant_id="acme-bank", graph_id="fraud-review")
+    run = await xai.start_run({"metadata": {"trace_id": "trace-8841"}})
 
-    # --- Execution ------------------------------------------------------
-    # A manually-recorded run showing a state transition and a tool call
-    # nested under one Execution, exactly as automatic graph instrumentation
-    # would populate it.
-    run = await runtime.start_run({"metadata": {"trace_id": "trace-8841"}})
-    await runtime.record_state_delta(
+    await xai.record_state_delta(
         "score_transaction", {"risk_score": 0.0}, {"risk_score": 0.91}, run=run
     )
-    await runtime.record_tool(
+    await xai.record_tool(
         "fraud_detector",
-        status="succeeded",
+        status=ToolStatus.SUCCEEDED,
         latency_ms=42.5,
-        output_reference="fraud-detector://run/8841/score",
+        output_reference="fraud-detector://scores/txn-8841",
         run=run,
     )
-    await runtime.finish_run(run)
-    _banner("Execution (real, nested tool call + state transition)")
-    print(run.execution.model_dump_json(indent=2, exclude={"id", "timestamp"}))
-
-    graph = runtime.instrument(
-        compiled_graph(lambda _: {"risk_score": 0.91, "answer": "HUMAN_REVIEW"})
-    )
-    await graph.ainvoke({"risk_score": 0.0})
-    context = runtime.context_from_config()
-
-    # --- Evidence -----------------------------------------------------
-    fraud_score_evidence = Evidence(
-        context=context,
-        evidence_type=EvidenceType.TOOL_RESULT,
+    score = await xai.record_evidence(
+        EvidenceType.TOOL_RESULT,
         summary="Fraud detector scored the transaction 0.91 (high risk).",
-        content_reference="fraud-detector://run/8841/score",
+        content_reference="fraud-detector://scores/txn-8841",
         confidence=0.97,
         quality=0.9,
+        run=run,
     )
-    threshold_evidence = Evidence(
-        context=context,
-        evidence_type=EvidenceType.POLICY,
-        summary="Bank policy requires human review above a 0.80 risk threshold.",
+    threshold = await xai.record_evidence(
+        EvidenceType.POLICY,
+        summary="Bank policy requires human review above a 0.80 risk score.",
         content_reference="policy://fraud/review-threshold",
         confidence=1.0,
+        run=run,
     )
-    _banner("Evidence")
-    print(fraud_score_evidence.model_dump_json(indent=2))
-
-    # --- Decision -------------------------------------------------------
-    decision = Decision(
-        context=context,
-        decision_type="routing",
-        selected_action="HUMAN_REVIEW",
+    decision = await xai.record_decision(
+        "HUMAN_REVIEW",
+        decision_type=DecisionType.ROUTING,
         candidate_actions=["AUTO_APPROVE", "HUMAN_REVIEW", "AUTO_DECLINE"],
-        evidence_ids=[fraud_score_evidence.id, threshold_evidence.id],
+        evidence_ids=[score.id, threshold.id],
         factors=[
             DecisionFactor(
-                name="fraud_risk_score",
-                value=0.91,
-                weight=0.8,
-                evidence_ids=[fraud_score_evidence.id],
+                name="fraud_risk_score", value=0.91, weight=0.8, evidence_ids=[score.id]
             ),
             DecisionFactor(
-                name="review_threshold",
-                value=0.8,
-                weight=0.2,
-                evidence_ids=[threshold_evidence.id],
+                name="review_threshold", value=0.8, weight=0.2, evidence_ids=[threshold.id]
             ),
         ],
         confidence=0.91,
+        run=run,
     )
-    _banner("Decision")
-    print(decision.model_dump_json(indent=2))
+    await xai.record_provenance(
+        "bank-api://accounts/4471/transactions/8841", "transaction://8841", "PRODUCED_BY", run=run
+    )
+    await xai.record_provenance("transaction://8841", score.id, "DERIVED_FROM", run=run)
+    await xai.record_provenance(score.id, decision.id, "SUPPORTED_BY", run=run)
+    await xai.finish_run(run)
 
-    # --- Provenance -------------------------------------------------------
-    # Bank API -> Transaction Record -> Fraud Detector -> Risk Score -> Decision
-    links = [
-        ProvenanceLink(
-            context=context,
-            source_id="bank-api://acct/4471/txn/8841",
-            target_id="transaction-record://8841",
-            relation="PRODUCED_BY",
-        ),
-        ProvenanceLink(
-            context=context,
-            source_id="transaction-record://8841",
-            target_id=str(fraud_score_evidence.id),
-            relation="DERIVED_FROM",
-        ),
-        ProvenanceLink(
-            context=context,
-            source_id=str(fraud_score_evidence.id),
-            target_id=str(decision.id),
-            relation="SUPPORTED_BY",
-        ),
-    ]
-    for link in links:
-        await store.write(link)
-    lineage = await store.lineage(str(decision.id), context=context)
-    _banner("Provenance (real lineage() query result)")
-    print("\n".join(link.model_dump_json(indent=2) for link in lineage))
+    banner("Execution")
+    print(run.execution.model_dump_json(indent=2))
 
-    # --- Attribution ------------------------------------------------------
-    explanation_context = ExplanationContext(
-        execution=Execution(
-            context=context,
-            status=ExecutionStatus.COMPLETED,
-            started_at=datetime.now(UTC),
-            ended_at=datetime.now(UTC),
-        ),
+    banner("Evidence")
+    print(score.model_dump_json(indent=2, exclude=CONTEXT_FIELDS))
+
+    banner("Decision")
+    print(decision.model_dump_json(indent=2, exclude=CONTEXT_FIELDS))
+
+    banner("Provenance lineage of the decision")
+    store = xai.registry.require(ProvenanceStore)
+    for link in await store.lineage(str(decision.id), context=run.execution.context):
+        print(link.model_dump_json(indent=2, include={"source_id", "target_id", "relation"}))
+
+    context = ExplanationContext(
+        execution=run.execution,
         decision=decision,
-        evidence=[fraud_score_evidence, threshold_evidence],
-        provenance=list(links),
-        audience="auditor",
+        evidence=[score, threshold],
+        audience=Audience.AUDITOR,
     )
-    attribution_engine: AttributionEngine = HybridAttribution()
-    attribution = await attribution_engine.attribute(explanation_context)
-    _banner("Attribution (real HybridAttribution.attribute() result)")
-    print(attribution.model_dump_json(indent=2))
+    banner("Attribution")
+    attribution = await xai.attribute(context)
+    print(attribution.model_dump_json(indent=2, exclude=CONTEXT_FIELDS))
 
-    # --- Policy -------------------------------------------------------
-    policy_provider: PolicyProvider = runtime.registry.require(PolicyProvider)
-    end_user_context = explanation_context.model_copy(update={"audience": "end_user"})
-    policy_decision = await policy_provider.evaluate(end_user_context, PolicyAction.EXPOSE)
-    _banner("Policy (real DefaultPolicyProvider.evaluate() result, end_user audience)")
-    print(policy_decision.model_dump_json(indent=2))
+    banner("Policy decision (end user, exposure)")
+    policy = xai.registry.require(PolicyProvider)
+    end_user = context.model_copy(update={"audience": Audience.END_USER})
+    exposure = await policy.evaluate(end_user, PolicyAction.EXPOSE)
+    print(exposure.model_dump_json(indent=2, exclude=CONTEXT_FIELDS))
 
-    # --- Explanation --------------------------------------------------
-    explanation_ctx = explanation_context.model_copy(update={"attribution": attribution})
-    explanation = await runtime.explain(explanation_ctx)
-    _banner("Explanation (real runtime.explain() result, auditor audience)")
-    print(explanation.model_dump_json(indent=2, exclude={"id", "timestamp"}))
-
-    await store.close()
+    banner("Explanation (auditor)")
+    explanation = await xai.explain_decision(decision, audience=Audience.AUDITOR, run=run)
+    print(explanation.model_dump_json(indent=2, exclude=CONTEXT_FIELDS))
 
 
 if __name__ == "__main__":

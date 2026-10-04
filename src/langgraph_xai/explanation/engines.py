@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
@@ -11,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..core.models import (
     AttributionContribution,
+    Decision,
+    DecisionType,
     EvidenceReference,
     Explanation,
     ExplanationContext,
@@ -20,6 +23,13 @@ from ..core.models import (
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
     from langchain_core.runnables import Runnable
+
+_WITHHELD_NOTES = {
+    "reasons": "Decision reasons are withheld by policy.",
+    "contributing_factors": "Contributing factors are withheld by policy.",
+    "supporting_evidence": "Supporting evidence is withheld by policy.",
+}
+_JSON_FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL | re.IGNORECASE)
 
 
 class ExplanationDraft(BaseModel):
@@ -32,59 +42,88 @@ class ExplanationDraft(BaseModel):
     disclosure: list[str] = Field(default_factory=list)
 
 
+def _block_text(block: object) -> str:
+    # A chat model's content blocks; only text blocks carry the answer.
+    if isinstance(block, Mapping):
+        text = block.get("text")
+        return text if isinstance(text, str) else ""
+    return str(block)
+
+
 def _policy_denies(context: ExplanationContext, field: str) -> bool:
-    for policy in context.policies:
-        if policy.action is PolicyAction.EXPOSE and (
-            not policy.allowed or field in policy.denied_fields
-        ):
-            return True
-    return False
+    return any(
+        policy.action is PolicyAction.EXPOSE
+        and (
+            not policy.allowed
+            or field in policy.denied_fields
+            or (bool(policy.allowed_fields) and field not in policy.allowed_fields)
+        )
+        for policy in context.policies
+    )
+
+
+def _decision_reasons(decision: Decision, *, include_factors: bool) -> list[str]:
+    reasons = [f"Selected action: {decision.selected_action}."]
+    alternatives = [
+        action for action in decision.candidate_actions if action != decision.selected_action
+    ]
+    if alternatives:
+        reasons.append(f"Alternatives considered: {', '.join(alternatives)}.")
+    if include_factors:
+        reasons.extend(
+            f"Factor {factor.name} was {factor.value!r}."
+            for factor in sorted(decision.factors, key=lambda item: item.name)
+        )
+    if decision.confidence is not None:
+        reasons.append(f"Decision confidence: {decision.confidence:g}.")
+    return reasons
 
 
 class StructuredExplanationEngine:
-    """Build a deterministic explanation without generating hidden reasoning."""
+    """Build a deterministic explanation from canonical fields, without calling a model.
+
+    The summary names the decision and selected action; ``reasons`` list the
+    selected action, alternatives, factor values, and confidence;
+    ``contributing_factors`` are the attribution contributions ranked by
+    absolute score; ``supporting_evidence`` references the decision's evidence.
+    An exposure policy that denies ``reasons``, ``contributing_factors``, or
+    ``supporting_evidence`` (or denies exposure altogether) empties that section
+    and records why in ``disclosure``. Withholding ``contributing_factors`` also
+    removes factor values from ``reasons``.
+    """
 
     requires_llm = False
 
     async def explain(self, context: ExplanationContext) -> Explanation:
+        """Render ``context`` for ``context.audience``."""
+        withheld = [field for field in _WITHHELD_NOTES if _policy_denies(context, field)]
         decision = context.decision
-        audience = str(context.audience)
         reasons: list[str] = []
-        factors: list[AttributionContribution] = []
         evidence: list[EvidenceReference] = []
-        disclosure: list[str] = []
-
+        factors: list[AttributionContribution] = []
         if decision is not None:
-            reasons.append(f"Selected action: {decision.selected_action}.")
-            reasons.extend(
-                self._factor_reason(factor.name, factor.value)
-                for factor in sorted(decision.factors, key=lambda item: item.name)
+            reasons = _decision_reasons(
+                decision, include_factors="contributing_factors" not in withheld
             )
-
+            evidence = [
+                EvidenceReference(evidence_id=evidence_id)
+                for evidence_id in sorted(set(decision.evidence_ids), key=str)
+            ]
+        else:
+            reasons = ["No decision was recorded."]
         if context.attribution is not None:
             factors = sorted(
                 context.attribution.contributions,
                 key=lambda item: (-abs(item.score), str(item.factor_id)),
             )
-        if decision is not None:
-            evidence = [
-                EvidenceReference(evidence_id=evidence_id)
-                for evidence_id in sorted(set(decision.evidence_ids), key=str)
-            ]
 
-        if _policy_denies(context, "reasons"):
+        if "reasons" in withheld:
             reasons = []
-            disclosure.append("Decision reasons are withheld by policy.")
-        if _policy_denies(context, "contributing_factors"):
+        if "contributing_factors" in withheld:
             factors = []
-            disclosure.append("Attribution factors are withheld by policy.")
-        if _policy_denies(context, "supporting_evidence"):
+        if "supporting_evidence" in withheld:
             evidence = []
-            disclosure.append("Supporting evidence is withheld by policy.")
-
-        if not reasons:
-            reasons.append("No decision details were captured.")
-        summary = self._summary(context, audience)
+        disclosure = [_WITHHELD_NOTES[field] for field in withheld]
         disclosure.extend(
             policy.reason
             for policy in context.policies
@@ -94,7 +133,7 @@ class StructuredExplanationEngine:
         return Explanation(
             context=context.execution.context,
             audience=context.audience,
-            summary=summary,
+            summary=self._summary(context),
             reasons=reasons,
             supporting_evidence=evidence,
             contributing_factors=factors,
@@ -103,21 +142,31 @@ class StructuredExplanationEngine:
         )
 
     @staticmethod
-    def _factor_reason(name: str, value: object) -> str:
-        return f"Factor {name} was {value!r}."
-
-    @staticmethod
-    def _summary(context: ExplanationContext, audience: str) -> str:
-        if context.decision is None:
-            return f"Execution completed; no decision was recorded for {audience}."
-        return (
-            f"The {audience} explanation is based on the selected action "
-            f"'{context.decision.selected_action}'."
+    def _summary(context: ExplanationContext) -> str:
+        decision = context.decision
+        if decision is None:
+            return (
+                f"No decision was recorded for this execution (status: {context.execution.status})."
+            )
+        kind = str(decision.decision_type)
+        subject = (
+            "The decision"
+            if kind == DecisionType.CUSTOM
+            else f"The {kind.replace('_', ' ')} decision"
         )
+        return f"{subject} selected '{decision.selected_action}'."
 
 
 class LLMExplanationEngine(StructuredExplanationEngine):
-    """Opt-in explanation generation through an injected LangChain runnable."""
+    """Opt-in phrasing of an already-approved explanation through an injected LangChain model.
+
+    The model receives only policy-filtered, structured facts and must return a
+    JSON object matching `ExplanationDraft` exactly; any other shape is
+    rejected. Sections withheld by policy are never sent to the model, and
+    withheld reasons are never taken from its reply. Runs only when constructed
+    with ``enabled=True`` *and* the runtime's ``XAIConfig.llm_explanation_enabled``
+    is set.
+    """
 
     requires_llm = True
 
@@ -135,22 +184,23 @@ class LLMExplanationEngine(StructuredExplanationEngine):
         self.timeout = timeout
 
     async def explain(self, context: ExplanationContext) -> Explanation:
+        """Phrase the structured explanation of ``context`` with the injected model."""
         if not self.enabled:
             raise RuntimeError("LLM explanations are disabled; construct with enabled=True")
         if self.model is None:
             raise RuntimeError("LLM explanations require an injected LangChain model")
 
-        prompt = self._prompt(context)
-        result = await asyncio.wait_for(self.model.ainvoke(prompt), timeout=self.timeout)
+        result = await asyncio.wait_for(
+            self.model.ainvoke(self._prompt(context)), timeout=self.timeout
+        )
         draft = self._validate(result)
         structured = await super().explain(context)
-        reasons = draft.reasons
-        if _policy_denies(context, "reasons"):
-            reasons = structured.reasons
         return structured.model_copy(
             update={
                 "summary": draft.summary,
-                "reasons": reasons,
+                "reasons": structured.reasons
+                if _policy_denies(context, "reasons")
+                else draft.reasons,
                 "disclosure": list(dict.fromkeys(structured.disclosure + draft.disclosure)),
                 "metadata": {"engine": "llm", "validated": True},
             }
@@ -159,14 +209,16 @@ class LLMExplanationEngine(StructuredExplanationEngine):
     @staticmethod
     def _prompt(context: ExplanationContext) -> str:
         decision = context.decision
+        withheld = [field for field in _WITHHELD_NOTES if _policy_denies(context, field)]
+        reasons_allowed = "reasons" not in withheld
         factors = []
-        if decision is not None and not _policy_denies(context, "contributing_factors"):
+        if decision is not None and reasons_allowed and "contributing_factors" not in withheld:
             factors = [
                 {"name": factor.name, "value": factor.value}
                 for factor in sorted(decision.factors, key=lambda item: item.name)
             ]
         evidence = []
-        if not _policy_denies(context, "supporting_evidence"):
+        if "supporting_evidence" not in withheld:
             evidence = [
                 {
                     "id": str(item.id),
@@ -178,9 +230,12 @@ class LLMExplanationEngine(StructuredExplanationEngine):
             ]
         payload = {
             "audience": str(context.audience),
+            "decision_type": str(decision.decision_type) if decision else None,
             "selected_action": decision.selected_action if decision else None,
+            "candidate_actions": decision.candidate_actions if decision and reasons_allowed else [],
             "factors": factors,
             "evidence": evidence,
+            "withheld_by_policy": [field.replace("_", " ") for field in withheld],
             "output_schema": {
                 "summary": "string",
                 "reasons": "array of strings",
@@ -193,7 +248,9 @@ class LLMExplanationEngine(StructuredExplanationEngine):
                 "and disclosure, matching output_schema exactly. `reasons` and `disclosure` "
                 "MUST each be a JSON array of strings, never a single string. "
                 "Use only the supplied observable facts. Do not infer or provide "
-                "hidden reasoning. Keep the explanation appropriate for the audience."
+                "hidden reasoning. Sections named in withheld_by_policy exist but are "
+                "withheld from this audience: never mention them, guess them, or say "
+                "they are missing. Keep the explanation appropriate for the audience."
             ),
         }
         return json.dumps(payload, sort_keys=True)
@@ -204,20 +261,17 @@ class LLMExplanationEngine(StructuredExplanationEngine):
             return result
         content = getattr(result, "content", result)
         if isinstance(content, list):
-            content = "".join(
-                block.get("text", "") if isinstance(block, Mapping) else str(block)
-                for block in content
-            )
+            content = "".join(_block_text(block) for block in content)
         if isinstance(content, str):
+            fenced = _JSON_FENCE.match(content)
             try:
-                content = json.loads(content)
-            except json.JSONDecodeError as exc:
+                content = json.loads(fenced.group(1) if fenced else content)
+            except (json.JSONDecodeError, RecursionError) as exc:
                 raise ValueError("LLM explanation output must be valid JSON") from exc
         if isinstance(content, Mapping):
-            # Models occasionally return a single string for a list-typed field
-            # (e.g. one combined disclosure sentence instead of an array). This is
-            # a formatting normalization only -- it does not add, infer, or hide
-            # any content the model did not already provide.
+            # Models occasionally return a single string for a list-typed field.
+            # Wrapping it is a formatting normalization only; unknown keys are
+            # still rejected by the strict schema below.
             content = {
                 key: [value]
                 if key in ("reasons", "disclosure") and isinstance(value, str)

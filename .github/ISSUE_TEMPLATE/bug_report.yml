@@ -49,9 +49,10 @@ body:
       label: Minimal reproduction
       description: >
         A minimal, self-contained code sample (ideally a runnable script)
-        that reproduces the issue. Include which providers/backends are
-        registered on the `XAIRuntime` (e.g. `InMemoryProvenanceStore`,
-        `PostgresProvenanceStore`, LangSmith/Langfuse/OTel observability).
+        that reproduces the issue. Include which providers are registered on
+        the `XAIRuntime` (for example the default `InMemoryProvenanceStore`
+        or your own `ProvenanceStore` subclass, and any LangSmith, Langfuse,
+        or OpenTelemetry observability adapter).
       render: python
     validations:
       required: true

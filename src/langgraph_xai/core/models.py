@@ -1,4 +1,9 @@
-"""Versioned canonical models for LangGraph explainability."""
+"""Versioned canonical models for LangGraph explainability.
+
+Every model is a Pydantic v2 model with ``extra="forbid"``, assignment
+validation, timezone-aware timestamps, and finite floats, and carries a
+``schema_version`` so serialized payloads are self-describing contracts.
+"""
 
 from __future__ import annotations
 
@@ -7,9 +12,9 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, field_serializer
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "2.0.0"
 
 type EntityId = UUID | str
 type Metadata = dict[str, JsonValue]
@@ -21,6 +26,8 @@ def utc_now() -> datetime:
 
 
 class CaptureMode(StrEnum):
+    """How much of a node's state change is recorded."""
+
     FULL = "full"
     DELTA = "delta"
     SELECTIVE = "selective"
@@ -29,23 +36,26 @@ class CaptureMode(StrEnum):
 
 
 class FailureMode(StrEnum):
+    """What happens when an instrumentation operation fails."""
+
     FAIL_OPEN = "fail_open"
     FAIL_CLOSED = "fail_closed"
     STRICT = "strict"
 
 
 class ExecutionStatus(StrEnum):
-    PENDING = "pending"
+    """Lifecycle status of an execution or a node execution."""
+
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
     INTERRUPTED = "interrupted"
-    PARTIAL = "partial"
 
 
 class ToolStatus(StrEnum):
-    RUNNING = "running"
+    """Outcome of a single tool invocation."""
+
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -53,6 +63,8 @@ class ToolStatus(StrEnum):
 
 
 class DecisionType(StrEnum):
+    """Common decision categories; any non-empty string is also accepted."""
+
     ROUTING = "routing"
     CLASSIFICATION = "classification"
     TOOL_SELECTION = "tool_selection"
@@ -65,6 +77,8 @@ class DecisionType(StrEnum):
 
 
 class EvidenceType(StrEnum):
+    """Common evidence categories; any non-empty string is also accepted."""
+
     STATE = "state"
     TOOL_RESULT = "tool_result"
     RETRIEVAL_DOCUMENT = "retrieval_document"
@@ -76,6 +90,8 @@ class EvidenceType(StrEnum):
 
 
 class Audience(StrEnum):
+    """Built-in explanation audiences; any string is also accepted."""
+
     DEVELOPER = "developer"
     AUDITOR = "auditor"
     BUSINESS = "business"
@@ -83,11 +99,15 @@ class Audience(StrEnum):
 
 
 class MemoryOperation(StrEnum):
+    """Direction of a memory access."""
+
     READ = "read"
     WRITE = "write"
 
 
 class HumanInteractionType(StrEnum):
+    """Kind of human-in-the-loop interaction."""
+
     INTERRUPT = "interrupt"
     APPROVAL = "approval"
     REJECTION = "rejection"
@@ -96,46 +116,47 @@ class HumanInteractionType(StrEnum):
 
 
 class PolicyAction(StrEnum):
+    """The data-handling action a policy decision governs."""
+
     CAPTURE = "capture"
-    RETAIN = "retain"
-    PROCESS = "process"
     EXPOSE = "expose"
 
 
 class CanonicalModel(BaseModel):
-    """Base for stable public contracts."""
+    """Base class for every versioned public contract."""
 
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, allow_inf_nan=False)
 
-    schema_version: Literal["1.0.0"] = SCHEMA_VERSION
+    schema_version: Literal["2.0.0"] = SCHEMA_VERSION
 
 
 class IdentifiedModel(CanonicalModel):
-    id: UUID = Field(default_factory=uuid4)
-    timestamp: datetime = Field(default_factory=utc_now)
+    """A canonical model with a unique ID and a timezone-aware timestamp."""
 
-    @field_validator("timestamp")
-    @classmethod
-    def require_timezone(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("timestamp must be timezone-aware")
-        return value
+    id: UUID = Field(default_factory=uuid4)
+    timestamp: AwareDatetime = Field(default_factory=utc_now)
 
 
 class ExecutionContext(CanonicalModel):
+    """Correlation and isolation identifiers shared by every artifact of one run."""
+
     application_id: str
     tenant_id: str
     graph_id: str
     run_id: UUID = Field(default_factory=uuid4)
     thread_id: str | None = None
     trace_id: str | None = None
-    span_id: str | None = None
-    parent_id: str | None = None
     checkpoint_id: str | None = None
     metadata: Metadata = Field(default_factory=dict)
 
 
 class ProvenanceLink(IdentifiedModel):
+    """A lineage edge from an upstream ``source`` to a downstream ``target``.
+
+    ``relation`` reads from the target back to the source, e.g. the target was
+    ``DERIVED_FROM`` the source.
+    """
+
     source_id: EntityId
     target_id: EntityId
     relation: Annotated[str, Field(min_length=1)]
@@ -144,11 +165,15 @@ class ProvenanceLink(IdentifiedModel):
 
 
 class EvidenceReference(CanonicalModel):
+    """A reference from an explanation to a piece of supporting evidence."""
+
     evidence_id: UUID
     relationship: str = "supported_by"
 
 
 class SourceReference(CanonicalModel):
+    """Where a piece of evidence originated, by reference rather than by copy."""
+
     source_id: EntityId
     source_type: str
     uri: str | None = None
@@ -156,6 +181,8 @@ class SourceReference(CanonicalModel):
 
 
 class Evidence(IdentifiedModel):
+    """Material supporting a decision: a summary plus a reference, never a payload dump."""
+
     evidence_type: EvidenceType | str
     context: ExecutionContext
     summary: str | None = None
@@ -167,36 +194,39 @@ class Evidence(IdentifiedModel):
 
 
 class StateChange(CanonicalModel):
+    """One changed state key: its value before and after a node ran."""
+
     path: str
     before: JsonValue = None
     after: JsonValue = None
 
 
 class StateTransition(IdentifiedModel):
+    """The state changes produced by one node execution."""
+
     context: ExecutionContext
     node_id: str
     changes: list[StateChange] = Field(default_factory=list)
     capture_mode: CaptureMode = CaptureMode.DELTA
-    influences: list[EntityId] = Field(default_factory=list)
     metadata: Metadata = Field(default_factory=dict)
 
 
 class NodeExecution(IdentifiedModel):
+    """Timing and outcome of one graph node execution."""
+
     context: ExecutionContext
     node_id: str
-    node_name: str | None = None
     parent_node_id: str | None = None
     status: ExecutionStatus
-    started_at: datetime
-    ended_at: datetime | None = None
+    started_at: AwareDatetime
+    ended_at: AwareDatetime | None = None
     attempt: int = Field(default=1, ge=1)
-    input_reference: str | None = None
-    output_reference: str | None = None
-    error_id: UUID | None = None
     metadata: Metadata = Field(default_factory=dict)
 
 
 class ToolExecution(IdentifiedModel):
+    """Outcome and latency of one tool invocation."""
+
     context: ExecutionContext
     tool_id: str
     tool_name: str
@@ -204,15 +234,13 @@ class ToolExecution(IdentifiedModel):
     status: ToolStatus
     input_reference: str | None = None
     output_reference: str | None = None
-    retry_count: int = Field(default=0, ge=0)
     latency_ms: float | None = Field(default=None, ge=0)
-    error_id: UUID | None = None
-    downstream_consumers: list[EntityId] = Field(default_factory=list)
-    related_decisions: list[UUID] = Field(default_factory=list)
     metadata: Metadata = Field(default_factory=dict)
 
 
 class RetrievedDocument(CanonicalModel):
+    """A retrieved document or chunk, identified by reference and rank."""
+
     document_id: str
     chunk_id: str | None = None
     rank: int | None = Field(default=None, ge=1)
@@ -223,6 +251,8 @@ class RetrievedDocument(CanonicalModel):
 
 
 class RetrievalExecution(IdentifiedModel):
+    """One retriever call and the documents it returned."""
+
     context: ExecutionContext
     retriever_id: str
     query_reference: str | None = None
@@ -232,17 +262,20 @@ class RetrievalExecution(IdentifiedModel):
 
 
 class MemoryReference(IdentifiedModel):
+    """A read from or write to long-term memory, by reference."""
+
     context: ExecutionContext
     memory_id: str
     operation: MemoryOperation
     namespace: str | None = None
     content_reference: str | None = None
     private: bool = True
-    influenced: list[EntityId] = Field(default_factory=list)
     metadata: Metadata = Field(default_factory=dict)
 
 
 class CheckpointReference(IdentifiedModel):
+    """A LangGraph checkpoint associated with a run."""
+
     context: ExecutionContext
     checkpoint_id: str
     parent_checkpoint_id: str | None = None
@@ -251,26 +284,28 @@ class CheckpointReference(IdentifiedModel):
 
 
 class HumanInteraction(IdentifiedModel):
+    """A human-in-the-loop interrupt, approval, rejection, edit, or resume."""
+
     context: ExecutionContext
     interaction_type: HumanInteractionType
     actor_reference: str | None = None
     request_reference: str | None = None
     response_reference: str | None = None
-    continuation_run_id: UUID | None = None
     metadata: Metadata = Field(default_factory=dict)
 
 
 class ExceptionEvent(IdentifiedModel):
+    """An exception observed during a run, by type and message."""
+
     context: ExecutionContext
     exception_type: str
     message: str
-    retryable: bool = False
-    attempt: int = Field(default=1, ge=1)
-    traceback_reference: str | None = None
     metadata: Metadata = Field(default_factory=dict)
 
 
 class DecisionFactor(CanonicalModel):
+    """A named, optionally weighted input to a decision."""
+
     name: str
     value: JsonValue = None
     evidence_ids: list[UUID] = Field(default_factory=list)
@@ -279,6 +314,8 @@ class DecisionFactor(CanonicalModel):
 
 
 class Decision(IdentifiedModel):
+    """The action an application selected, its alternatives, factors, and evidence."""
+
     context: ExecutionContext
     decision_type: DecisionType | str
     selected_action: str
@@ -293,6 +330,8 @@ class Decision(IdentifiedModel):
 
 
 class AttributionContribution(CanonicalModel):
+    """One factor's or evidence item's signed contribution to a decision."""
+
     factor_id: EntityId
     factor_type: str
     score: float
@@ -303,6 +342,8 @@ class AttributionContribution(CanonicalModel):
 
 
 class AttributionResult(IdentifiedModel):
+    """The output of an attribution method: contributions plus the method that produced them."""
+
     context: ExecutionContext
     subject_id: EntityId
     method: str
@@ -313,6 +354,15 @@ class AttributionResult(IdentifiedModel):
 
 
 class PolicyDecision(IdentifiedModel):
+    """The outcome of a policy evaluation for one action and audience.
+
+    For ``PolicyAction.EXPOSE``, the explanation engines withhold a section
+    (``reasons``, ``contributing_factors``, or ``supporting_evidence``) when
+    ``allowed`` is false, when the section is in ``denied_fields``, or when
+    ``allowed_fields`` is non-empty and does not name it. ``reason`` is shown
+    to the audience as a disclosure note.
+    """
+
     context: ExecutionContext
     policy_id: str
     action: PolicyAction
@@ -321,21 +371,27 @@ class PolicyDecision(IdentifiedModel):
     reason: str | None = None
     allowed_fields: set[str] = Field(default_factory=set)
     denied_fields: set[str] = Field(default_factory=set)
-    obligations: list[str] = Field(default_factory=list)
     metadata: Metadata = Field(default_factory=dict)
+
+    @field_serializer("allowed_fields", "denied_fields")
+    def _serialize_field_set(self, value: set[str]) -> list[str]:
+        return sorted(value)
 
 
 class ExplanationContext(CanonicalModel):
+    """The request to explain: an execution, an optional decision, and an audience."""
+
     execution: Execution
     decision: Decision | None = None
     evidence: list[Evidence] = Field(default_factory=list)
-    provenance: list[ProvenanceLink] = Field(default_factory=list)
     attribution: AttributionResult | None = None
     policies: list[PolicyDecision] = Field(default_factory=list)
     audience: Audience | str = Audience.DEVELOPER
 
 
 class Explanation(IdentifiedModel):
+    """A policy-filtered, audience-specific account of a decision."""
+
     context: ExecutionContext
     audience: Audience | str
     summary: Annotated[str, Field(min_length=1)]
@@ -347,11 +403,17 @@ class Explanation(IdentifiedModel):
 
 
 class Execution(IdentifiedModel):
+    """The record of one graph run: status, timing, and everything observed during it.
+
+    ``continuation_of`` is the ``run_id`` of the earlier run whose checkpoint
+    this run continued from: the interrupted run it resumed, the failed run it
+    retried, or the run whose history it replayed.
+    """
+
     context: ExecutionContext
     status: ExecutionStatus
-    started_at: datetime
-    ended_at: datetime | None = None
-    parent_execution_id: UUID | None = None
+    started_at: AwareDatetime
+    ended_at: AwareDatetime | None = None
     continuation_of: UUID | None = None
     nodes: list[NodeExecution] = Field(default_factory=list)
     state_transitions: list[StateTransition] = Field(default_factory=list)
@@ -365,51 +427,69 @@ class Execution(IdentifiedModel):
 
 
 class XAIEvent(IdentifiedModel):
-    event_id: UUID = Field(default_factory=uuid4)
+    """Base class for canonical events; ``sequence`` orders events within a run."""
+
     context: ExecutionContext
     sequence: int = Field(ge=0)
-    payload: Metadata = Field(default_factory=dict)
 
 
 class ExecutionStartedEvent(XAIEvent):
+    """Emitted when a run starts."""
+
     event_type: Literal["execution.started"] = "execution.started"
 
 
 class ExecutionCompletedEvent(XAIEvent):
+    """Emitted when a run completes successfully."""
+
     event_type: Literal["execution.completed"] = "execution.completed"
 
 
 class ExecutionFailedEvent(XAIEvent):
+    """Emitted when a run fails or is cancelled."""
+
     event_type: Literal["execution.failed"] = "execution.failed"
     error: ExceptionEvent
 
 
 class StateTransitionEvent(XAIEvent):
+    """Emitted when a node's state change is recorded."""
+
     event_type: Literal["state.transition"] = "state.transition"
     transition: StateTransition
 
 
 class NodeExecutionEvent(XAIEvent):
+    """Emitted when a node finishes, fails, or is interrupted."""
+
     event_type: Literal["node.execution"] = "node.execution"
     node: NodeExecution
 
 
 class ToolExecutionEvent(XAIEvent):
+    """Emitted when a tool invocation finishes."""
+
     event_type: Literal["tool.execution"] = "tool.execution"
     tool: ToolExecution
 
 
 class RetrievalExecutionEvent(XAIEvent):
+    """Emitted when a retriever call finishes."""
+
     event_type: Literal["retrieval.execution"] = "retrieval.execution"
     retrieval: RetrievalExecution
 
 
 class CheckpointEvent(XAIEvent):
+    """Emitted when a checkpoint is linked to a run."""
+
     event_type: Literal["checkpoint"] = "checkpoint"
     checkpoint: CheckpointReference
 
 
 class InterruptEvent(XAIEvent):
+    """Emitted when a human interaction (interrupt, resume, approval, ...) is recorded."""
+
     event_type: Literal["interrupt"] = "interrupt"
     interaction: HumanInteraction
 
@@ -426,15 +506,3 @@ type CanonicalEvent = Annotated[
     | InterruptEvent,
     Field(discriminator="event_type"),
 ]
-
-# Compatibility aliases retained during the initial development cycle.
-VERSION = SCHEMA_VERSION
-Event = XAIEvent
-EventUnion = CanonicalEvent
-ExecutionRecord = Execution
-Attribution = AttributionResult
-Relation = ProvenanceLink
-StateCaptured = StateTransitionEvent
-ExecutionStarted = ExecutionStartedEvent
-ExecutionCompleted = ExecutionCompletedEvent
-ExecutionFailed = ExecutionFailedEvent

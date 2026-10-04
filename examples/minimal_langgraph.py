@@ -1,23 +1,45 @@
-"""Graph -> instrument -> execute -> explain."""
+"""The smallest instrumented graph: wrap it, run it, and inspect what was captured.
+
+Run with:
+
+    uv run python examples/minimal_langgraph.py
+"""
 
 import asyncio
+from typing import TypedDict
 
-from _shared import compiled_graph, explain_result
+from langgraph.graph import END, START, StateGraph
 
-from langgraph_xai import DecisionFactor, XAIRuntime
+from langgraph_xai import XAIRuntime
+
+
+class State(TypedDict, total=False):
+    question: str
+    answer: str
+
+
+def answer(state: State) -> State:
+    return {"answer": f"Echo: {state['question']}"}
 
 
 async def main() -> None:
-    runtime = XAIRuntime(graph_id="minimal")
-    graph = runtime.instrument(compiled_graph(lambda state: {"answer": f"Echo: {state['query']}"}))
-    result = await graph.ainvoke({"query": "Why?"})
-    explanation = await explain_result(
-        runtime,
-        "FINAL_RESPONSE",
-        DecisionFactor(name="answer_available", value=True),
-    )
+    builder = StateGraph(State)
+    builder.add_node("answer", answer)
+    builder.add_edge(START, "answer")
+    builder.add_edge("answer", END)
+
+    xai = XAIRuntime(graph_id="minimal")
+    graph = xai.instrument(builder.compile())
+
+    with xai.collect_runs() as runs:
+        result = await graph.ainvoke({"question": "Why?"})
+
+    execution = runs[0].execution
     print(result)
-    print(explanation)
+    print(f"status={execution.status} nodes={[node.node_id for node in execution.nodes]}")
+    for transition in execution.state_transitions:
+        for change in transition.changes:
+            print(f"{transition.node_id}: {change.path} {change.before!r} -> {change.after!r}")
 
 
 if __name__ == "__main__":

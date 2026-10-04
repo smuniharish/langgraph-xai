@@ -2,8 +2,13 @@
 
 ## Supported versions
 
-Security fixes are prioritized for the latest released version. Pre-release
-and unreleased development code may receive fixes at maintainers' discretion.
+| Version | Supported |
+| --- | --- |
+| 1.x | Yes: security fixes are released as 1.x patch versions |
+| 0.1.x | No: upgrade to 1.x |
+
+Fixes are made on the latest 1.x release. Unreleased development code receives
+fixes before release.
 
 ## Reporting a vulnerability
 

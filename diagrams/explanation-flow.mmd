@@ -1,0 +1,18 @@
+flowchart LR
+    classDef core fill:#eef4ff,stroke:#3567c7,color:#0f2547
+    classDef provider fill:#fff7e8,stroke:#c98a12,color:#0f2547
+    classDef outcome fill:#ecf8f1,stroke:#2f8f5b,color:#0f2547
+
+    decision["Recorded Decision<br/>+ referenced Evidence"]:::core
+    context["ExplanationContext<br/>execution · decision · evidence · audience"]:::core
+    gate{"LLM engine and<br/>llm_explanation_enabled?"}:::provider
+    policy["PolicyProvider<br/>evaluate(EXPOSE)"]:::provider
+    attribution["AttributionEngine<br/>signed, normalized contributions"]:::provider
+    engine["ExplanationEngine<br/>structured or LLM-phrased"]:::provider
+    result["Explanation<br/>summary · reasons · factors · evidence · disclosure"]:::outcome
+    refused["XAIInstrumentationError<br/>(no unfiltered output)"]:::outcome
+
+    decision -- "explain_decision" --> context --> gate
+    gate -- "allowed" --> policy --> attribution --> engine --> result
+    gate -- "blocked" --> refused
+    policy -. "evaluation fails" .-> refused

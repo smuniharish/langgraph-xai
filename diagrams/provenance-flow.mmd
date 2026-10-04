@@ -1,6 +1,13 @@
 flowchart LR
-    Event[Execution event] --> Link[Provenance link]
-    Source[Approved source] --> Link
-    Version[Source or rule version] --> Link
-    Link --> Artifact[Canonical artifact]
-    Artifact --> Resolver[Reference resolver]
+    classDef source fill:#fff7e8,stroke:#c98a12,color:#0f2547
+    classDef artifact fill:#eef4ff,stroke:#3567c7,color:#0f2547
+    classDef decision fill:#ecf8f1,stroke:#2f8f5b,color:#0f2547
+
+    subgraph Walk["store.lineage(decision.id) follows these links, nearest first"]
+        direction LR
+        decision["Decision<br/>HUMAN_REVIEW"]:::decision
+        score["Evidence<br/>fraud score 0.91"]:::artifact
+        txn["transaction://8841"]:::source
+        api["bank-api://accounts/4471/<br/>transactions/8841"]:::source
+        decision -- "SUPPORTED_BY" --> score -- "DERIVED_FROM" --> txn -- "PRODUCED_BY" --> api
+    end

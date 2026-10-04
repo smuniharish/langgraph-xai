@@ -1,52 +1,87 @@
-# How to run multi-agent graphs with correlation
+# Correlate multi-agent runs and retries
 
-**Goal:** confirm that every artifact produced by a multi-agent (or
-multi-subgraph) run — including retried tool calls inside any one agent —
-correlates under a single `run_id`/`trace_id`.
+A request often passes through several agents, subgraphs, retries, and services.
+`langgraph-xai` gives everything one call produces a shared identity, so you
+can collect it with one query.
 
-## Steps
+## One call, one run, one identity
 
-1. Build a supervisor graph composing two or more agent-like nodes (or
-   compiled subgraphs) as usual — nothing xgraph-specific here.
+Every record of an instrumented call carries the same `ExecutionContext`.
+`run_id` is unique per call. `thread_id` and `trace_id` come from the config
+you pass:
 
-2. Instrument the **top-level** compiled graph once:
+```python
+result = await graph.ainvoke(
+    {"symbol": "ACME"},
+    {"metadata": {"trace_id": "brief-2026-10-04"}, "configurable": {"thread_id": "desk-7"}},
+)
+```
 
-   ```python
-   runtime = XAIRuntime(graph_id="supervisor-researcher-writer")
-   instrumented = runtime.instrument(graph)
-   ```
+Subgraphs, agents built with `create_agent` and called inside a node, and
+`deepagents` sub-agents run inside the same call. Their nodes, tools, and state
+changes therefore land in the same run. Subgraph nodes record the calling node
+as `parent_node_id`. See
+[create_agent inside a node](../examples/create-agent-nested.md) for real
+output.
 
-3. If a node calls a `Runnable`/tool directly (rather than via a `ToolNode`),
-   make sure the node function accepts and forwards `config` — otherwise
-   xgraph's callback handler never sees that call:
+To join runs with your own request IDs, pass a UUID as
+`metadata["xai_run_id"]`. The run then uses it instead of a random ID.
 
-   ```python
-   def researcher(state, config: RunnableConfig):
-       return {"research": retrying_tool.invoke({"symbol": state["symbol"]}, config=config)}
-   ```
+## Retries stay visible
 
-4. Optionally pin a `trace_id` for easier correlation in external systems:
+A failure that a retry recovers from is still a fact worth keeping. Tool retries
+(`tool.with_retry(...)`) record one `ToolExecution` per attempt. Node retries
+(LangGraph's `RetryPolicy`) record one `NodeExecution` per attempt, numbered by
+`attempt`.
 
-   ```python
-   await instrumented.ainvoke(
-       {"symbol": "ACME"},
-       config={"metadata": {"trace_id": "my-external-correlation-id"}},
-   )
-   ```
+The [multi-agent example](../examples/multi-agent-retry.md) runs a researcher
+whose market-data tool times out once, then succeeds on retry, and a writer
+that turns the result into a report:
 
-5. Verify correlation by querying the store and checking the distinct
-   `run_id`/`trace_id` sets:
+```python
+lookup = market_data.with_retry(stop_after_attempt=3, wait_exponential_jitter=False)
+```
 
-   ```python
-   run_ids = {str(r.context.run_id) for r in records}
-   assert len(run_ids) == 1
-   ```
+Real output:
 
-## Full example and real captured output
+```json
+{
+  "records": 9,
+  "run_ids": ["79751d55-01a5-40a3-b26d-2000a7a18951"],
+  "trace_ids": ["brief-2026-10-04"]
+}
+```
 
-See [examples: multi-agent correlation, retries, and failures](../examples/multi-agent-retry.md):
-a real supervisor graph where a tool fails once and recovers via
-`.with_retry()`. Both the failed attempt and the succeeded retry are
-captured as distinct `ToolExecution` records, under the same `run_id`, so a
-transient failure is never silently lost even though the overall run
-completes successfully.
+```json
+[
+  {"status": "timed_out", "error_type": "TimeoutError"},
+  {"status": "succeeded", "error_type": null}
+]
+```
+
+All nine stored records share one run ID and one trace ID, and the recovered
+timeout is recorded next to the successful retry.
+
+## Query everything a run produced
+
+```python
+store = xai.registry.require(ProvenanceStore)
+records = [
+    record
+    async for record in store.query(
+        StoreFilter(application_id="research", tenant_id="demo", run_id=run.run_id)
+    )
+]
+```
+
+Results are ordered by timestamp and event sequence. Add `item_type=` to
+select one record type (for example `Execution` or `ToolExecutionEvent`), and
+use `limit`/`offset` to page through long runs.
+
+## Across services
+
+When agents run in different processes, give them the same `trace_id` (and,
+if they share an identity, the same `xai_run_id`). Each process records its own
+runs, and the observability adapters export the identifiers as `xai.run_id`,
+`xai.trace_id`, `xai.thread_id`, and `xai.tenant_id` attributes. Your tracing
+backend can then join them; see [Observability](../architecture/observability.md).

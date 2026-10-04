@@ -1,7 +1,16 @@
 flowchart LR
-    Execution[Graph execution] --> Runtime[Runtime]
-    Runtime --> Artifacts[Canonical artifacts]
-    Runtime -. correlation IDs .-> Trace[Trace or span context]
-    Artifacts --> Policy[Disclosure policy]
-    Policy --> Export[Opt-in telemetry export]
-    Trace --> Export
+    classDef core fill:#eef4ff,stroke:#3567c7,color:#0f2547
+    classDef adapter fill:#fff7e8,stroke:#c98a12,color:#0f2547
+    classDef backend fill:#ecf8f1,stroke:#2f8f5b,color:#0f2547
+
+    events["Canonical events<br/>execution · node · state · tool<br/>retrieval · interrupt"]:::core
+    fields["correlation_fields<br/>xai.run_id · xai.event_id · xai.tenant_id<br/>xai.trace_id · ..."]:::core
+    events --> fields
+
+    fields --> langsmith["LangSmithObservability<br/>one trace per run (trace ID = run_id)<br/>one child run per event"]:::adapter
+    fields --> langfuse["LangfuseObservability<br/>one event observation per event<br/>trace = run_id.hex or your trace ID"]:::adapter
+    fields --> otel["OpenTelemetryObservability<br/>one span per event<br/>attributes + xai.payload JSON"]:::adapter
+
+    langsmith --> ls[("LangSmith")]:::backend
+    langfuse --> lf[("Langfuse")]:::backend
+    otel --> collector[("Any OTLP backend")]:::backend

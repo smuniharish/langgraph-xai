@@ -1,50 +1,48 @@
 # Evidence
 
-## Kid-level view
-
-Evidence is the small set of approved facts used to support a choice.
-
-## Production view
-
-Evidence records identify approved inputs such as retrieved material, rules,
-measurements, or application assertions, with source references, selection
-reason, confidence or uncertainty where meaningful, and disclosure status.
-
-## Why and architecture
-
-Applications own domain correctness. The runtime records supplied evidence;
-policy filters it before storage, export, or rendering. Evidence is not a
-promise that a model was correct.
-
-## Real example: input and output
+`Evidence` is a piece of information your application relied on: a model score,
+a retrieved passage, a tool result, a business rule. It is recorded explicitly,
+at the point where the information is used:
 
 ```python
-fraud_score_evidence = Evidence(
-    context=context,
-    evidence_type=EvidenceType.TOOL_RESULT,
+score = await xai.record_evidence(
+    EvidenceType.TOOL_RESULT,
     summary="Fraud detector scored the transaction 0.91 (high risk).",
-    content_reference="fraud-detector://run/8841/score",
+    content_reference="fraud-detector://scores/txn-8841",
     confidence=0.97,
     quality=0.9,
 )
 ```
 
-Real captured output, produced by
-[`examples/canonical_model_gallery.py`](https://github.com/samamuniharish/langgraph-xai/blob/main/examples/canonical_model_gallery.py):
+`record_evidence` returns the record, whose `id` you pass to a
+[decision](decisions.md). Inside an instrumented call it is added to the current
+run. Elsewhere, pass `run=` explicitly.
+
+## Fields
+
+| Field | Meaning |
+| --- | --- |
+| `evidence_type` | What kind of information this is: `state`, `tool_result`, `retrieval_document`, `memory`, `rule`, `policy`, `model_output`, `custom`, or your own string. |
+| `summary` | A short, human-readable statement of what the evidence shows. It appears in explanations. |
+| `content_reference` | Where the full content lives (a URI or document ID), so the content itself is never copied. |
+| `source` | A `SourceReference` (`source_id`, `source_type`, optional `uri`) naming the system it came from. |
+| `confidence` | How certain the information is, from 0 to 1, if the source provides it. |
+| `quality` | How reliable the source is, from 0 to 1. |
+| `metadata` | Any additional JSON-safe fields. Credentials are redacted. |
+
+## Recorded evidence
+
+From the [canonical model gallery](https://github.com/smuniharish/langgraph-xai/blob/master/examples/canonical_model_gallery.py)
+(context omitted):
 
 ```json
 {
-  "schema_version": "1.0.0",
-  "id": "e42ff48a-9ecb-41e9-ba82-4a3d8cda4064",
+  "schema_version": "2.0.0",
+  "id": "a454462d-9b9c-4154-813c-ca46f2bd7a27",
+  "timestamp": "2026-10-04T13:36:40.775807Z",
   "evidence_type": "tool_result",
-  "context": {
-    "application_id": "application",
-    "tenant_id": "default",
-    "graph_id": "fraud-review",
-    "run_id": "4aadf569-21b8-4d7a-a911-b0d71e7fbb0f"
-  },
   "summary": "Fraud detector scored the transaction 0.91 (high risk).",
-  "content_reference": "fraud-detector://run/8841/score",
+  "content_reference": "fraud-detector://scores/txn-8841",
   "source": null,
   "confidence": 0.97,
   "quality": 0.9,
@@ -52,15 +50,33 @@ Real captured output, produced by
 }
 ```
 
-Note the fields it deliberately does **not** carry: no raw model prompt, no
-full retrieved document body, no chain-of-thought — only a summary, a
-resolvable reference, and a numeric confidence/quality pair. That is the
-whole contract: evidence is a pointer plus a rationale, never a payload dump.
+## How evidence is used
 
-## Mistakes to avoid
+- A decision lists the evidence it relied on in `evidence_ids`, and each
+  decision factor can name its own evidence.
+- [Attribution](attribution.md) scores each referenced piece of evidence as
+  `confidence × quality`, with a missing value counting as 1.0.
+- An [explanation](explanations.md) references the decision's evidence in
+  `supporting_evidence`, unless the audience's policy withholds it.
 
-Store a document ID, quoted approved span, and retrieval timestamp. Avoid
-dumping all retrieved text, treating an absent citation as proof, or labeling
-model output as independent evidence.
+## Where evidence is kept
 
+Evidence is kept on the run (`run.evidence`) and delivered to every registered
+[plugin](../architecture/plugins.md) as it is recorded. It is not written to the
+`ProvenanceStore`, which holds executions, events, and provenance links. To
+persist evidence, register a plugin that writes it to your system of record.
 
+## Guidance
+
+- **Record facts, not reasoning.** "Fraud model scored 0.91" is evidence.
+  A model's internal deliberation is not.
+- **Reference, don't embed.** Put the document URI in `content_reference` and a
+  one-sentence description in `summary`. Raw documents, prompts, and payloads
+  stay in the systems that own them.
+- **Use `retrieval_document` per passage.** When a decision relies on retrieved
+  passages, record one evidence item per passage you used, with the retriever's
+  score as `confidence`. The
+  [retrieval and tools example](../examples/retrieval-and-tools.md) does exactly
+  this with captured retrievals.
+- **Connect evidence to its origin** with [provenance](provenance.md) when the
+  path from raw data to evidence matters for an audit.

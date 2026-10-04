@@ -1,27 +1,70 @@
 # Disclosure policy
 
-Explainability has data-handling consequences. A disclosure policy determines
-what can be captured, retained, exported, resolved, and shown.
+`langgraph-xai` controls information at two boundaries: what is **recorded**,
+and what is **disclosed** in an explanation. This page describes both
+pipelines, and what they do and do not protect.
 
-## Policy operations
+## Recording boundary
 
-- **Allow:** retain the approved value at the boundary.
-- **Omit:** do not retain or emit the value.
-- **Redact:** replace sensitive portions with a safe representation.
-- **Reference-only:** retain a controlled reference and metadata, not payload
-  content.
+![The capture pipeline](../assets/diagrams/capture-pipeline.png)
 
-## Required boundaries
+1. **Redaction.** Free-form values (state, metadata, interrupt payloads,
+   resume answers, decision factor values, and source and document metadata)
+   are converted to JSON-safe data, and credential-named keys are replaced
+   with `"[not captured]"`. A factor whose name is a credential name keeps no
+   value at all. This happens before the canonical record exists, so no
+   provider ever sees a credential value. See
+   [Redaction](../concepts/policies.md#redaction).
+2. **Capture mode.** `XAIConfig.capture_state` limits which state keys are
+   recorded at all: changed keys only, every key, named keys, a custom
+   selection, or none.
+3. **Capture policy.** The `CapturePolicy` sees each event and can drop it. A
+   dropped event is not added to the run's `Execution`, not written to the
+   store, and not emitted. If the policy fails, the event is dropped.
+4. **Sinks.** Allowed events go to the store and the observability provider,
+   bounded by the concurrency limit and timeout, with failures handled by the
+   failure mode.
 
-Apply policy when:
+## Disclosure boundary
 
-1. receiving data for artifact capture;
-2. writing to any persistence adapter;
-3. exporting to an external integration; and
-4. rendering an explanation or other user-facing output.
+![How an explanation is built](../assets/diagrams/explanation-flow.png)
 
-Policy is an application responsibility informed by its privacy, security, and
-retention obligations. It should be tested with realistic sensitive-data
-fixtures and reviewed when new artifact fields or integrations are added.
+1. **LLM gate.** An LLM-backed engine runs only if
+   `XAIConfig.llm_explanation_enabled` is set. This is checked before anything
+   else.
+2. **Exposure policy.** The `PolicyProvider` decides, for the audience, which
+   sections may be shown.
+3. **Rendering.** The engine fills only the allowed sections. Withheld sections
+   stay empty and are announced in `disclosure`. A withheld section never
+   reaches a model, and withheld factor values do not reappear in `reasons`.
+4. **Fail closed.** If any step fails, `XAIInstrumentationError` is raised
+   instead of returning an explanation.
 
-![Policy boundary](../assets/diagrams/policy-boundary.png)
+## What the controls guarantee
+
+- Values under credential-named keys are never stored or exported when they
+  are recorded through instrumentation or the `record_*` methods. A record you
+  build yourself and pass to `record_artifact` is delivered as you built it.
+- A dropped event leaves no trace in the store, the observability backend, or
+  the run's `Execution`.
+- An explanation is never returned without its exposure policy having been
+  evaluated.
+- A withheld section's content is never sent to an LLM.
+- Raw content and private memory are never read by the built-in engines;
+  explanations cite evidence by ID and summary.
+
+## What they do not do
+
+- **Authenticate audiences.** The policy trusts the `audience` it is given.
+  Your application must decide who the caller is.
+- **Recognize personal data by value.** Redaction works on key names. An email
+  address in a field named `contact` is recorded unless capture mode or a
+  capture policy excludes it.
+- **Secure the backends.** Access control, encryption at rest, and retention in
+  your database and tracing tools remain your responsibility.
+- **Enforce retention.** How long records are kept, and when they are
+  deleted, is decided by your store and database. The runtime evaluates
+  capture (`PolicyAction.CAPTURE`) and exposure (`PolicyAction.EXPOSE`)
+  policies only.
+
+See [Security](../operations/security.md) for deployment guidance.

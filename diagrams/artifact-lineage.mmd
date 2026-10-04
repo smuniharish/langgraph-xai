@@ -1,8 +1,61 @@
-flowchart TD
-    Execution[Execution] --> Provenance[Provenance]
-    Execution --> Decision[Decision]
-    Evidence[Evidence reference] --> Decision
-    Decision --> Attribution[Attribution]
-    Provenance --> Explanation[Explanation]
-    Decision --> Explanation
-    Attribution --> Explanation
+classDiagram
+    direction LR
+    class Execution {
+        context: ExecutionContext
+        status: ExecutionStatus
+        started_at / ended_at
+        continuation_of: run_id
+        nodes: NodeExecution[]
+        state_transitions: StateTransition[]
+        tools: ToolExecution[]
+        retrievals: RetrievalExecution[]
+        memory: MemoryReference[]
+        checkpoints: CheckpointReference[]
+        human_interactions: HumanInteraction[]
+        exceptions: ExceptionEvent[]
+    }
+    class ExecutionContext {
+        application_id / tenant_id / graph_id
+        run_id
+        thread_id / trace_id / checkpoint_id
+    }
+    class Evidence {
+        evidence_type
+        summary
+        content_reference
+        confidence / quality
+    }
+    class Decision {
+        decision_type
+        selected_action
+        candidate_actions
+        factors: DecisionFactor[]
+        evidence_ids
+        confidence / uncertainty
+    }
+    class ProvenanceLink {
+        source_id
+        relation
+        target_id
+    }
+    class AttributionResult {
+        method
+        contributions[]
+        normalized
+        confidence
+    }
+    class Explanation {
+        audience
+        summary
+        reasons
+        contributing_factors
+        supporting_evidence
+        disclosure
+    }
+    Execution *-- ExecutionContext : context
+    Decision --> Evidence : evidence_ids
+    ProvenanceLink --> Evidence : lineage
+    AttributionResult --> Decision : subject_id
+    Explanation --> Decision : explains
+    Explanation --> AttributionResult : contributing_factors
+    Explanation --> Evidence : supporting_evidence

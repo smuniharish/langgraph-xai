@@ -1,37 +1,57 @@
 # Examples
 
-Every example on this page is a real, runnable script under
-[`examples/`](https://github.com/samamuniharish/langgraph-xai/tree/main/examples),
-and every code block and output block quoted from it is copy-pasted from an
-actual run — not hand-written or idealized. Run any of them yourself with
-`uv run python examples/<name>.py` (some require `EXPLABS_API_KEY` for a real
-LLM call, noted per page).
+Complete, runnable programs in the
+[`examples/`](https://github.com/smuniharish/langgraph-xai/tree/master/examples)
+directory. Every page shows real output from running the script. The offline
+examples also run in the test suite, so they keep working.
 
-- [Minimal graph](minimal-graph.md) — the smallest possible instrumented
-  graph.
-- [create_agent nested inside a StateGraph node](create-agent-nested.md) — an
-  LLM agent one step inside a larger hand-written graph, correlated onto the
-  same run automatically.
-- [Full explanation output](full-explanation.md) — the complete, real
-  `Explanation` JSON for a banking decision.
-- [Disclosure-policy matrix](disclosure-matrix.md) — 16 real permutations of
-  policy x audience x explanation engine, including a real LLM.
-- [Human-in-the-loop interrupts](interrupt-hitl.md) — a real
-  `interrupt()`/`Command(resume=...)` cycle, captured as first-class
-  artifacts.
-- [MCP tools (Playwright)](mcp-tools.md) — a real MCP tool server, a real
-  LLM agent, zero MCP-specific xgraph code.
-- [deepagents](deepagents.md) — a real `deepagents` deep agent, instrumented
-  with zero deepagents-specific xgraph code.
-- [Multi-agent correlation and retries](multi-agent-retry.md) — a real
-  supervisor graph with a transiently-failing, retried tool call.
-- [Policy-filtered export](policy-export.md) — allow, redact, and
-  reference-only disclosure at an export boundary.
+## Run without any service
 
-## Best practice
+| Example | Shows |
+| --- | --- |
+| [Minimal graph](minimal-graph.md) | The smallest instrumented graph and what it captures |
+| [Fraud review: full explanation](full-explanation.md) | Evidence, a decision, provenance, and one decision explained to two audiences |
+| [Retrieval and tools](retrieval-and-tools.md) | Retrievers and `ToolNode` calls captured automatically and turned into evidence |
+| [Human-in-the-loop](interrupt-hitl.md) | `interrupt()` and `Command(resume=...)`, linked to the checkpoint to replay |
+| [Multi-agent retries and correlation](multi-agent-retry.md) | A recovered tool timeout and a shared run and trace ID |
+| [Disclosure matrix](disclosure-matrix.md) | One decision checked against every policy, audience, and engine |
 
-Start with minimal capture, deterministic fixtures, and no provider export.
-Add one adapter at a time and verify its disclosure and failure behavior —
-see [How to test disclosure policies](../how-to/disclosure-policies.md) and
-[How to configure failure modes](../how-to/failure-modes.md).
+Two more scripts back the documentation: the
+[canonical model gallery](https://github.com/smuniharish/langgraph-xai/blob/master/examples/canonical_model_gallery.py)
+prints every record type for the [Concepts](../concepts/index.md) pages, and
+[`failure_modes.py`](https://github.com/smuniharish/langgraph-xai/blob/master/examples/failure_modes.py)
+produces the output in [Configure failure modes](../how-to/failure-modes.md).
 
+## Run with a chat model
+
+These need `OPENAI_API_KEY`. Set `OPENAI_BASE_URL` for an OpenAI-compatible
+gateway and `OPENAI_MODEL` to pick the model (default `gpt-4o-mini`).
+
+| Example | Shows | Also needs |
+| --- | --- | --- |
+| [create_agent decision](create-agent.md) | Recording and explaining a decision from agent middleware | |
+| [create_agent inside a node](create-agent-nested.md) | An agent nested in a larger graph, captured as one run | |
+| [deepagents](deepagents.md) | A deep agent instrumented with no framework-specific code | `examples` group |
+| [MCP tools](mcp-tools.md) | Tool calls served by the Playwright MCP server | `examples` group, Node.js |
+
+## Run with a database
+
+| Example | Shows | Needs |
+| --- | --- | --- |
+| [PostgreSQL store](postgres-store.md) | A complete `ProvenanceStore` subclass that keeps records in PostgreSQL | `examples` group, `XAI_POSTGRES_DSN` |
+
+## Running an example
+
+From a clone of the repository:
+
+```bash
+uv sync --all-extras --all-groups
+uv run python examples/fraud_review.py
+```
+
+For the model-backed examples:
+
+```bash
+export OPENAI_API_KEY=...
+uv run python examples/create_agent_decision_explanation.py
+```

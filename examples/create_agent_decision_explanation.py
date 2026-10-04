@@ -1,41 +1,28 @@
-"""Record and explain a decision from inside a real ``create_agent`` agent.
+"""Record and explain a decision from inside ``create_agent`` middleware.
 
-Most real LangGraph applications today are built with
-``langchain.agents.create_agent`` rather than a hand-written ``StateGraph`` --
-it still compiles to an ordinary LangGraph runnable, so
-``XAIRuntime.instrument(...)`` needs no special-casing for it. The one
-detail worth being deliberate about is *where* to hook in a decision: this
-script uses ``create_agent``'s ``AgentMiddleware.aafter_model`` hook, which
-fires once per model turn and lets you distinguish "the model just chose to
-call a tool" from "the model produced a final answer" -- the latter is what
-gets recorded as a `Decision` and explained.
+``langchain.agents.create_agent`` compiles to an ordinary LangGraph graph, so
+``XAIRuntime.instrument`` needs no special handling and every tool call is captured
+automatically. ``AgentMiddleware.aafter_model`` runs after each model turn; once the
+model answers without requesting another tool, the middleware records the tool
+results the agent relied on as evidence and decides whether to escalate the case.
 
-A real gotcha this script deliberately avoids: the middleware hook's own
-second parameter is itself named ``runtime`` (LangGraph injects its own
-``Runtime[ContextT]`` context object under that name). Naming your
-``XAIRuntime`` instance attribute anything other than that reserved
-parameter name -- here, ``self.xai_runtime`` -- avoids silently shadowing it
-inside the hook.
+Requires ``OPENAI_API_KEY`` (optionally ``OPENAI_BASE_URL`` and ``OPENAI_MODEL``).
 
 Run with:
 
-    uv run --system-certs python examples/create_agent_decision_explanation.py
-
-Requires ``EXPLABS_API_KEY`` in the environment (the agent itself needs a
-real model to decide whether to call a tool and to answer).
+    uv run --extra llm-openai python examples/create_agent_decision_explanation.py
 """
 
 import asyncio
-import os
 from typing import Any
 
+from _shared import chat_model, show
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
-from langchain.tools import tool
-from langchain_openai import ChatOpenAI
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import tool
 
-from langgraph_xai import Decision, DecisionFactor, XAIRuntime
-from langgraph_xai.core import ExplanationContext
+from langgraph_xai import Audience, DecisionFactor, DecisionType, EvidenceType, XAIRuntime
 
 
 @tool
@@ -44,76 +31,75 @@ def check_fraud_risk(transaction_id: str, amount: float) -> str:
     return "0.91" if amount > 5000 else "0.12"
 
 
-class DecisionRecordingMiddleware(AgentMiddleware):
-    """Records the agent's final answer as a `Decision` and explains it.
+class DecisionRecorder(AgentMiddleware):
+    """When the agent finishes, record its tool results as evidence and decide on escalation."""
 
-    Runs after every model turn; skips turns where the model is still
-    calling a tool, and only records/explains once it produces a final
-    answer with no further tool calls.
-    """
-
-    def __init__(self, xai_runtime: XAIRuntime) -> None:
+    def __init__(self, xai: XAIRuntime, threshold: float = 0.8) -> None:
         super().__init__()
-        self.xai_runtime = xai_runtime
-        self.decision: Decision | None = None
-        self.explanation_summary: str | None = None
+        self.xai = xai
+        self.threshold = threshold
 
-    async def aafter_model(self, state: dict[str, Any], runtime: Any) -> None:
-        last_message = state["messages"][-1]
-        if getattr(last_message, "tool_calls", None):
-            return None  # still calling a tool; not a final decision yet
-
-        self.decision = await self.xai_runtime.record_decision(
-            "FINAL_RESPONSE",
-            decision_type="final_response",
-            factors=[DecisionFactor(name="answer_available", value=True)],
-        )
-        explanation = await self.xai_runtime.explain(
-            ExplanationContext(
-                execution=self.xai_runtime.current_run.execution,
-                decision=self.decision,
-                audience="end_user",
+    async def aafter_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        messages = state["messages"]
+        if getattr(messages[-1], "tool_calls", None):
+            return None
+        results = [message for message in messages if isinstance(message, ToolMessage)]
+        evidence = [
+            await self.xai.record_evidence(
+                EvidenceType.TOOL_RESULT,
+                summary=f"{message.name} returned {message.text}.",
+                content_reference=f"tool-call://{message.tool_call_id}",
+                confidence=1.0,
             )
+            for message in results
+        ]
+        score = max((float(message.text) for message in results), default=0.0)
+        await self.xai.record_decision(
+            "ESCALATE_FOR_REVIEW" if score >= self.threshold else "NO_ACTION",
+            decision_type=DecisionType.ESCALATION,
+            candidate_actions=["ESCALATE_FOR_REVIEW", "NO_ACTION"],
+            evidence_ids=[item.id for item in evidence],
+            factors=[
+                DecisionFactor(
+                    name="fraud_risk_score",
+                    value=score,
+                    evidence_ids=[item.id for item in evidence],
+                ),
+                DecisionFactor(name="escalation_threshold", value=self.threshold),
+            ],
         )
-        self.explanation_summary = explanation.summary
         return None
 
 
 async def main() -> None:
-    model = ChatOpenAI(
-        base_url="https://api.experientiallabs.ai/v1",
-        api_key=os.environ["EXPLABS_API_KEY"],
-        model="gpt-5.6-luna",
-    )
-    runtime = XAIRuntime(graph_id="fraud-review")
-    middleware = DecisionRecordingMiddleware(runtime)
+    xai = XAIRuntime(graph_id="fraud-assistant")
+    async with chat_model() as model:
+        agent = create_agent(
+            model,
+            tools=[check_fraud_risk],
+            system_prompt="You are a fraud review assistant. Use the tool, then answer briefly.",
+            middleware=[DecisionRecorder(xai)],
+        )
+        with xai.collect_runs() as runs:
+            result = await xai.instrument(agent).ainvoke(
+                {
+                    "messages": [
+                        {"role": "user", "content": "Transaction txn-8841 is $9200. Is it risky?"}
+                    ]
+                }
+            )
+    (run,) = runs
 
-    agent = create_agent(
-        model,
-        tools=[check_fraud_risk],
-        system_prompt="You are a fraud review assistant. Use the tool, then answer briefly.",
-        middleware=[middleware],
+    print(f"Agent: {result['messages'][-1].content}")
+    show(
+        "Captured tool calls",
+        [
+            {"tool": item.tool_name, "tool_call_id": item.tool_call_id, "status": item.status}
+            for item in run.execution.tools
+        ],
     )
-
-    instrumented = runtime.instrument(agent)
-    result = await instrumented.ainvoke(
-        {"messages": [{"role": "user", "content": "Transaction txn-8841 is $9200. Is it risky?"}]}
-    )
-
-    print("--- Final agent message ---")
-    print(result["messages"][-1].content)
-    print("\n--- Recorded decision + explanation ---")
-    print("selected_action:", middleware.decision.selected_action if middleware.decision else None)
-    print("explanation:", middleware.explanation_summary)
-
-    assert middleware.decision is not None, "the middleware must have recorded a Decision"
-    assert middleware.decision.selected_action == "FINAL_RESPONSE"
-    assert middleware.explanation_summary, "explain() must have produced a summary"
-    print(
-        "\nVerified: the Decision and Explanation were produced from inside "
-        "create_agent's own after-model hook, with no canonical model built "
-        "by hand in application code."
-    )
+    explanation = await xai.explain_decision(run.decisions[-1], audience=Audience.END_USER, run=run)
+    show("Explanation", explanation.model_dump(mode="json", include={"summary", "reasons"}))
 
 
 if __name__ == "__main__":

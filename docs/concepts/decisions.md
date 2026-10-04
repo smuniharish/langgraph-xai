@@ -1,80 +1,110 @@
 # Decisions
 
-## Kid-level view
-
-A decision says which option, branch, rule, or action was selected.
-
-## Production view
-
-A decision links to its execution and evidence, records the selected outcome,
-decision method or rule version, alternatives when available, and uncertainty.
-It describes an application event; it does not expose private chain-of-thought.
-
-## Why and architecture
-
-Separating decision records from prose lets evaluators inspect structured
-behavior and lets renderers explain only approved fields.
-
-## Real example: input and output
+A `Decision` records what your application chose and on what basis: the
+selected action, the alternatives it considered, the factors that drove the
+choice, and the evidence behind them. It is recorded explicitly, in the node
+where the choice is made:
 
 ```python
-decision = Decision(
-    context=context,
-    decision_type="routing",
-    selected_action="HUMAN_REVIEW",
+decision = await xai.record_decision(
+    "HUMAN_REVIEW",
+    decision_type=DecisionType.ROUTING,
     candidate_actions=["AUTO_APPROVE", "HUMAN_REVIEW", "AUTO_DECLINE"],
-    evidence_ids=[fraud_score_evidence.id, threshold_evidence.id],
+    evidence_ids=[score.id, threshold.id],
     factors=[
-        DecisionFactor(
-            name="fraud_risk_score", value=0.91, weight=0.8, evidence_ids=[fraud_score_evidence.id]
-        ),
-        DecisionFactor(
-            name="review_threshold", value=0.8, weight=0.2, evidence_ids=[threshold_evidence.id]
-        ),
+        DecisionFactor(name="fraud_risk_score", value=0.91, weight=0.8, evidence_ids=[score.id]),
+        DecisionFactor(name="review_threshold", value=0.8, weight=0.2, evidence_ids=[threshold.id]),
     ],
     confidence=0.91,
 )
 ```
 
-Real captured output, produced by
-[`examples/canonical_model_gallery.py`](https://github.com/samamuniharish/langgraph-xai/blob/main/examples/canonical_model_gallery.py):
+## Fields
+
+| Field | Meaning |
+| --- | --- |
+| `selected_action` | The action that was taken. |
+| `decision_type` | `routing`, `classification`, `tool_selection`, `approval`, `rejection`, `escalation`, `hitl`, `final_response`, `custom` (the default), or your own string. |
+| `candidate_actions` | Every action that was considered, including the selected one. |
+| `factors` | Named inputs to the choice. Each `DecisionFactor` has a `name`, a JSON-safe `value`, an optional `weight`, and optional `evidence_ids`. |
+| `evidence_ids` | The [evidence](evidence.md) the decision relied on. |
+| `provenance_ids` | IDs of related [provenance links](provenance.md). |
+| `policy_references` | Identifiers of business rules or policies that were applied. |
+| `confidence`, `uncertainty` | Optional values from 0 to 1. |
+| `metadata` | Any additional JSON-safe fields. Credentials are redacted. |
+
+## Recorded decision
+
+From the [canonical model gallery](https://github.com/smuniharish/langgraph-xai/blob/master/examples/canonical_model_gallery.py)
+(context omitted):
 
 ```json
 {
-  "schema_version": "1.0.0",
-  "id": "31406623-8b6d-4148-8d54-e2ab93a8a39f",
+  "schema_version": "2.0.0",
+  "id": "572816a2-2af3-4dd8-a35f-59c83e698333",
+  "timestamp": "2026-10-04T13:36:40.776079Z",
   "decision_type": "routing",
   "selected_action": "HUMAN_REVIEW",
   "candidate_actions": ["AUTO_APPROVE", "HUMAN_REVIEW", "AUTO_DECLINE"],
   "evidence_ids": [
-    "e42ff48a-9ecb-41e9-ba82-4a3d8cda4064",
-    "1e74b6d9-dc1e-4be2-8d75-9b5395b680f3"
+    "a454462d-9b9c-4154-813c-ca46f2bd7a27",
+    "15425043-3857-4c55-8849-fd05c868c246"
   ],
+  "provenance_ids": [],
   "factors": [
     {
-      "name": "fraud_risk_score", "value": 0.91, "weight": 0.8,
-      "evidence_ids": ["e42ff48a-9ecb-41e9-ba82-4a3d8cda4064"]
+      "schema_version": "2.0.0",
+      "name": "fraud_risk_score",
+      "value": 0.91,
+      "evidence_ids": ["a454462d-9b9c-4154-813c-ca46f2bd7a27"],
+      "weight": 0.8,
+      "metadata": {}
     },
     {
-      "name": "review_threshold", "value": 0.8, "weight": 0.2,
-      "evidence_ids": ["1e74b6d9-dc1e-4be2-8d75-9b5395b680f3"]
+      "schema_version": "2.0.0",
+      "name": "review_threshold",
+      "value": 0.8,
+      "evidence_ids": ["15425043-3857-4c55-8849-fd05c868c246"],
+      "weight": 0.2,
+      "metadata": {}
     }
   ],
+  "policy_references": [],
   "confidence": 0.91,
-  "uncertainty": null
+  "uncertainty": null,
+  "metadata": {}
 }
 ```
 
-`route=HUMAN_REVIEW` here is exactly what an evaluator or auditor can inspect
-without touching the graph's internal reasoning — the decision is a record
-of *what was selected and against which evidence*, never a transcript of
-*how a model arrived at it*.
+## Explaining a decision
 
-## Mistakes to avoid
+Every recorded decision is kept on its run (`run.decisions`) and delivered to
+registered plugins. To explain one after the graph call returns, keep the run
+with `collect_runs` and pass both to `explain_decision`:
 
-Record `route=manual_review`, `rule_version=2026-01`, and evidence references.
-Do not infer a decision from a final answer alone or claim a causal mechanism
-that was never recorded.
+```python
+with xai.collect_runs() as runs:
+    await graph.ainvoke(payload)
+(run,) = runs
+explanation = await xai.explain_decision(run.decisions[-1], audience=Audience.AUDITOR, run=run)
+```
 
-![Decision and evidence](../assets/diagrams/decision-evidence.png)
+`explain_decision` gathers the evidence the decision and its factors reference
+(or all of the run's evidence, if the decision references none),
+[attributes](attribution.md) the decision, applies the exposure
+[policy](policies.md), and renders the [explanation](explanations.md).
 
+## Guidance
+
+- **Record the decision where it is made**, with the alternatives that were
+  really available. An explanation can only mention what was recorded.
+- **Give factors weights when they reflect policy.** The default attribution
+  engine uses a factor's `weight` as its score, and treats a factor without a
+  weight as 1.0.
+- **Keep factor values free of personal data an audience must not see.**
+  Factor values appear in explanation reasons. A policy that withholds
+  `contributing_factors` removes them, but values that are never recorded never
+  need withholding.
+- **Agents with model-chosen actions** (for example `create_agent`) can record
+  the decision in a middleware or tool after the model responds; see the
+  [create_agent example](../examples/create-agent.md).

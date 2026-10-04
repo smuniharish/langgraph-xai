@@ -11,10 +11,10 @@ if TYPE_CHECKING:
 
 
 class NoOpObservability(ObservabilityAdapter):
-    """Discard events while preserving the provider lifecycle contract."""
+    """Discard events while preserving the provider lifecycle (the default provider)."""
+
+    def __init__(self) -> None:
+        super().__init__(deduplication_window=0)
 
     async def _emit(self, event: CanonicalEvent) -> None:
         del event
-
-
-NoOpProvider = NoOpObservability

@@ -1,8 +1,37 @@
 flowchart LR
-    App[LangGraph application] --> Runtime[langgraph-xai runtime]
-    Runtime --> Artifacts[Structured artifacts]
-    Policy[Disclosure policy] --> Runtime
-    Policy --> Artifacts
-    Artifacts --> Explain[Explanation assembly]
-    Runtime -. optional .-> Integrations[LangSmith / Langfuse / OpenTelemetry]
-    Artifacts -. optional .-> Storage[Persistence adapter]
+    classDef app fill:#ecf8f1,stroke:#2f8f5b,color:#0f2547
+    classDef core fill:#eef4ff,stroke:#3567c7,color:#0f2547
+    classDef provider fill:#fff7e8,stroke:#c98a12,color:#0f2547
+
+    subgraph Application["Your application"]
+        compiled["Compiled LangGraph graph<br/>StateGraph · create_agent · deepagents"]:::app
+        code["Your nodes, tools,<br/>and middleware"]:::app
+    end
+
+    subgraph XAI["langgraph-xai"]
+        proxy["InstrumentedGraph<br/>invoke · stream · batch<br/>sync and async"]:::core
+        callbacks["Callback handlers<br/>nodes · state · tools · retrievers"]:::core
+        runtime["XAIRuntime<br/>runs · canonical artifacts<br/>failure mode"]:::core
+        explain["explain_decision"]:::core
+    end
+
+    subgraph Recording["Recording providers"]
+        plugins["XAIPlugin"]:::provider
+        capture["CapturePolicy"]:::provider
+        sinks["ProvenanceStore<br/>ObservabilityProvider"]:::provider
+    end
+
+    subgraph Explaining["Explanation providers"]
+        policy["PolicyProvider"]:::provider
+        attribution["AttributionEngine"]:::provider
+        engine["ExplanationEngine"]:::provider
+    end
+
+    compiled -- "xai.instrument" --> proxy --> callbacks --> runtime
+    code -- "record_evidence<br/>record_decision" --> runtime
+    runtime -- "evidence, decisions" --> plugins
+    runtime -- "canonical events" --> capture -- "allowed" --> sinks
+    runtime --> explain
+    explain --> policy
+    explain --> attribution
+    explain --> engine

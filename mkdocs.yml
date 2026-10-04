@@ -1,31 +1,68 @@
 site_name: langgraph-xai
-site_description: Provider-neutral explainability for LangGraph applications
-site_url: https://samamuniharish.github.io/langgraph-xai/
-repo_name: samamuniharish/langgraph-xai
-repo_url: https://github.com/samamuniharish/langgraph-xai
-edit_uri: edit/main/docs/
+site_description: >-
+  Explainability for LangGraph applications: what ran, why it was decided,
+  and what each audience may see.
+site_url: https://langgraph-xai.readthedocs.io/en/latest/
+repo_name: smuniharish/langgraph-xai
+repo_url: https://github.com/smuniharish/langgraph-xai
+edit_uri: edit/master/docs/
+copyright: Released under the Apache License 2.0.
 
 watch:
   - src
 
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
 theme:
   name: material
   features:
+    - content.action.edit
     - content.code.copy
     - navigation.footer
     - navigation.sections
+    - navigation.top
+    - search.highlight
     - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
 
 plugins:
   - search
+  # Click a diagram to open it full size, with zoom.
+  - glightbox
   - mkdocstrings:
       handlers:
         python:
+          paths: [src]
           options:
             docstring_style: google
+            extensions:
+              - griffe_pydantic:
+                  schema: false
             show_source: false
             show_root_heading: true
             show_root_full_path: false
+            show_symbol_type_heading: true
             merge_init_into_class: true
             separate_signature: true
             show_signature_annotations: true
@@ -36,9 +73,15 @@ plugins:
 markdown_extensions:
   - admonition
   - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
   - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
+  - tables
   - toc:
       permalink: true
 
@@ -46,72 +89,70 @@ nav:
   - Home: index.md
   - Getting started:
       - Quickstart: getting-started/quickstart.md
-      - Configuration constraints: getting-started/configuration.md
-      - Agent Skills: agent-skills.md
+      - Configuration: getting-started/configuration.md
   - Concepts:
       - Overview: concepts/index.md
       - Execution: concepts/execution.md
-      - Provenance: concepts/provenance.md
       - Evidence: concepts/evidence.md
       - Decisions: concepts/decisions.md
+      - Provenance: concepts/provenance.md
       - Attribution: concepts/attribution.md
       - Explanations: concepts/explanations.md
       - Policies: concepts/policies.md
-  - Architecture:
-      - Overview: architecture/overview.md
-      - Decisions (ADRs): architecture/decisions.md
-      - Runtime: architecture/runtime.md
-      - Canonical model: architecture/canonical-model.md
-      - Provenance: architecture/provenance.md
-      - Plugins: architecture/plugins.md
-      - Observability: architecture/observability.md
-      - Storage: architecture/storage.md
-      - Concurrency: architecture/concurrency.md
-      - Failure handling: architecture/failure.md
-      - Artifacts: architecture/artifacts.md
-      - Disclosure policy: architecture/disclosure-policy.md
+  - How-to guides:
+      - Overview: how-to/index.md
+      - Explain a decision after the run: how-to/explain-after-run.md
+      - Handle human-in-the-loop interrupts: how-to/interrupts.md
+      - Correlate multi-agent runs and retries: how-to/multi-agent.md
+      - Capture MCP tool calls: how-to/mcp-tools.md
+      - Generate LLM-phrased explanations: how-to/llm-explanations.md
+      - Test disclosure policies: how-to/disclosure-policies.md
+      - Configure failure modes: how-to/failure-modes.md
+  - Examples:
+      - Overview: examples/index.md
+      - Minimal graph: examples/minimal-graph.md
+      - "Fraud review: full explanation": examples/full-explanation.md
+      - Retrieval and tools: examples/retrieval-and-tools.md
+      - Human-in-the-loop: examples/interrupt-hitl.md
+      - Multi-agent retries and correlation: examples/multi-agent-retry.md
+      - Disclosure matrix: examples/disclosure-matrix.md
+      - create_agent decision: examples/create-agent.md
+      - create_agent inside a node: examples/create-agent-nested.md
+      - deepagents: examples/deepagents.md
+      - MCP tools: examples/mcp-tools.md
+      - PostgreSQL store: examples/postgres-store.md
   - Integrations:
       - Overview: integrations/index.md
       - LangGraph: integrations/langgraph.md
       - LangSmith: integrations/langsmith.md
-      - LangSmith comparison: integrations/langsmith-vs-langgraph-xai.md
       - Langfuse: integrations/langfuse.md
       - OpenTelemetry: integrations/opentelemetry.md
-  - How-to guides:
-      - Overview: how-to/index.md
-      - Handle human-in-the-loop interrupts: how-to/interrupts.md
-      - Integrate MCP tools: how-to/mcp-tools.md
-      - Run multi-agent graphs with correlation: how-to/multi-agent.md
-      - Test disclosure policies: how-to/disclosure-policies.md
-      - Enable live LLM explanations: how-to/llm-explanations.md
-      - Configure failure modes: how-to/failure-modes.md
-      - Explain a decision after the run finishes: how-to/explain-after-run.md
-  - Examples:
-      - Overview: examples/index.md
-      - Minimal graph: examples/minimal-graph.md
-      - create_agent nested inside a StateGraph node: examples/create-agent-nested.md
-      - Full explanation output: examples/full-explanation.md
-      - Disclosure-policy matrix: examples/disclosure-matrix.md
-      - Human-in-the-loop interrupts: examples/interrupt-hitl.md
-      - MCP tools (Playwright): examples/mcp-tools.md
-      - deepagents: examples/deepagents.md
-      - Multi-agent correlation and retries: examples/multi-agent-retry.md
-      - Policy-filtered export: examples/policy-export.md
-  - API:
+      - LangSmith and langgraph-xai: integrations/langsmith-vs-langgraph-xai.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Runtime: architecture/runtime.md
+      - Canonical model: architecture/canonical-model.md
+      - Storage: architecture/storage.md
+      - Provenance: architecture/provenance.md
+      - Observability: architecture/observability.md
+      - Disclosure policy: architecture/disclosure-policy.md
+      - Extensibility: architecture/plugins.md
+  - API reference:
       - Overview: api/index.md
-      - Configuration: api/config.md
       - Runtime: api/runtime.md
+      - Configuration: api/config.md
       - Canonical models: api/models.md
-      - Protocols: api/protocols.md
+      - Capabilities: api/protocols.md
       - Storage: api/storage.md
       - Observability: api/observability.md
       - Explanation engines: api/explanation.md
       - Attribution engines: api/attribution.md
-      - Policy providers: api/policy.md
+      - Policies: api/policy.md
+      - Plugins: api/plugins.md
   - Operations:
-      - Configuration: operations/configuration.md
       - Security: operations/security.md
       - Troubleshooting: operations/troubleshooting.md
   - Development:
       - Contributing: development/contributing.md
-      - Testing and live evaluation: development/testing.md
+      - Testing: development/testing.md
+  - Agent Skills: agent-skills.md

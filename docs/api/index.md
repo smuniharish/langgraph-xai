@@ -1,28 +1,27 @@
-# API overview
+# API reference
 
-The API reference is organized like LangGraph's and LangChain's: one focused
-page per module, each combining a short real usage snippet with the
-generated signature/docstring reference for that module's public classes.
+Generated from the docstrings of the public API. The classes you use day to day
+are importable from the top-level `langgraph_xai` package; each entry below
+shows the module where the class is defined.
 
-| Page | What it covers |
-| ---- | ---- |
-| [Configuration](config.md) | `XAIConfig` — every field, its type, default, and when to change it |
-| [Runtime](runtime.md) | `XAIRuntime` — the constructor and every `record_*`/`explain`/`instrument` method |
-| [Canonical models](models.md) | `Execution`, `Evidence`, `Decision`, `ProvenanceLink`, `AttributionResult`, `Explanation`, and their nested types |
-| [Protocols](protocols.md) | The `Protocol` interfaces a new provider must implement: `ProvenanceStore`, `ObservabilityProvider`, `AttributionEngine`, `ExplanationEngine`, `PolicyProvider`, `CapturePolicy` |
-| [Storage](storage.md) | `InMemoryProvenanceStore` and the provenance-store contract |
-| [Observability](observability.md) | `NoOpObservability`, `LangfuseObservability`, `OpenTelemetryObservability`, `LangSmithObservability` |
-| [Explanation engines](explanation.md) | `StructuredExplanationEngine` and the `ExplanationEngine` contract |
-| [Attribution engines](attribution.md) | `HybridAttribution` and the `AttributionEngine` contract |
-| [Policy providers](policy.md) | `DefaultPolicyProvider`, `DefaultCapturePolicy` |
+| Page | Contents |
+| --- | --- |
+| [Runtime](runtime.md) | `XAIRuntime`, `Run`, `XAIInstrumentationError`, `Registry`, `InstrumentedGraph`, `RUN_ID_METADATA_KEY` |
+| [Configuration](config.md) | `XAIConfig` |
+| [Canonical models](models.md) | Execution records, decision records, explanation records, events, and enumerations |
+| [Capabilities](protocols.md) | The `ProvenanceStore` base class and the provider protocols |
+| [Storage](storage.md) | `InMemoryProvenanceStore`, `StoreFilter` |
+| [Observability](observability.md) | LangSmith, Langfuse, OpenTelemetry, and no-op adapters, the adapter base class, helpers, and errors |
+| [Explanation engines](explanation.md) | `StructuredExplanationEngine`, `LLMExplanationEngine`, `ExplanationDraft` |
+| [Attribution engines](attribution.md) | `HybridAttribution`, `RuleBasedAttribution`, `EvidenceAttribution` |
+| [Policies](policy.md) | `DefaultCapturePolicy`, `DefaultPolicyProvider`, and the redaction helpers |
+| [Plugins](plugins.md) | `XAIPlugin`, `PluginManager` |
 
-## Compatibility guidance
+## Stability
 
-Treat every serialized canonical model (`Execution`, `Evidence`, `Decision`,
-`ProvenanceLink`, `AttributionResult`, `Explanation`, …) as a versioned
-contract identified by its `schema_version` field. Provider SDK objects
-(a Langfuse client, an OTel tracer) passed into an adapter are not part of
-xgraph's public contract — only the adapter class itself is. When a method
-is marked planned in release notes, treat this reference as architectural
-guidance rather than an availability guarantee for that release.
-
+- The public API is everything listed in this reference. Names that start with
+  an underscore are private and may change at any time.
+- Serialized records are versioned contracts, identified by their
+  `schema_version`. See [Canonical model](../architecture/canonical-model.md#compatibility).
+- Breaking changes happen only in major releases, and each one is listed in
+  the [changelog](https://github.com/smuniharish/langgraph-xai/blob/master/CHANGELOG.md).

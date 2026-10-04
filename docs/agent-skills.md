@@ -1,20 +1,41 @@
 # Agent Skills
 
 `langgraph-xai` publishes one portable Agent Skill that teaches coding agents
-how to integrate, configure, debug, test, and operate the existing
-`langgraph-xai` runtime. The skill is documentation and procedural guidance;
-it is not a Python runtime component and does not change how
-`langgraph-xai` is installed.
+how to integrate, configure, test, and debug `langgraph-xai` in an
+application. The skill is guidance for agents; it is not part of the Python
+package and does not change how `langgraph-xai` is installed.
 
 | Component | Location |
 | --- | --- |
-| langgraph-xai Python runtime | [`src/langgraph_xai/`](https://github.com/smuniharish/langgraph-xai/tree/main/src/langgraph_xai) |
-| Canonical Agent Skill | [`langgraph-xai-skills/skills/langgraph-xai/`](https://github.com/smuniharish/langgraph-xai/tree/main/langgraph-xai-skills/skills/langgraph-xai) |
-| Canonical instructions | [`SKILL.md`](https://github.com/smuniharish/langgraph-xai/blob/main/langgraph-xai-skills/skills/langgraph-xai/SKILL.md) |
+| langgraph-xai Python package | [`src/langgraph_xai/`](https://github.com/smuniharish/langgraph-xai/tree/master/src/langgraph_xai) |
+| The Agent Skill | [`langgraph-xai-skills/skills/langgraph-xai/`](https://github.com/smuniharish/langgraph-xai/tree/master/langgraph-xai-skills/skills/langgraph-xai) |
+| Its instructions | [`SKILL.md`](https://github.com/smuniharish/langgraph-xai/blob/master/langgraph-xai-skills/skills/langgraph-xai/SKILL.md) |
 
-The skill follows the [Agent Skills specification](https://agentskills.io/specification)
-and contains the required `name` and `description` frontmatter. There is no
-separate Claude, Codex, Cursor, or Copilot copy of the skill.
+## What the skill contains
+
+The skill follows the [Agent Skills specification](https://agentskills.io/specification).
+Agents read `SKILL.md` first and open the other files only when a task needs
+them:
+
+- **`SKILL.md`**: when to use the skill, the core workflow, and the rules an
+  integration follows. Its frontmatter has `name`, `description`, `license`,
+  `compatibility`, and `metadata.version`, the `langgraph-xai` release it
+  describes.
+- **`references/API.md`**: public imports, runtime methods, settings, records,
+  and provider contracts.
+- **`references/RECIPES.md`**: complete patterns for instrumenting graphs and
+  agents, human-in-the-loop, disclosure policies, storage, tracing backends,
+  failure modes, and LLM-phrased explanations.
+- **`references/TROUBLESHOOTING.md`**: symptoms, causes, and fixes.
+- **`scripts/verify_setup.py`**: an offline check that the project's
+  environment has compatible versions, and that a small instrumented graph
+  records, explains, and links runs correctly.
+- **`assets/test_disclosure_policy.py`**: a pytest template that tests what
+  each audience may and may not see.
+
+The repository validates the skill on every change: the reference validator,
+link checks, the setup script, and the template run in its test suite. There
+is no separate Claude, Codex, Cursor, or Copilot copy of the skill.
 
 ## Install from skills.sh
 
@@ -22,7 +43,7 @@ The [skills CLI](https://www.skills.sh/docs/cli) installs skills from a GitHub
 source. Install the `langgraph-xai` skill directory directly:
 
 ```bash
-npx skills add https://github.com/smuniharish/langgraph-xai/tree/main/langgraph-xai-skills/skills/langgraph-xai
+npx skills add https://github.com/smuniharish/langgraph-xai/tree/master/langgraph-xai-skills/skills/langgraph-xai
 ```
 
 This is the portable installation route. Follow the CLI's current target
@@ -33,7 +54,7 @@ the target agent's supported skills directory. The shorthand
 ## Install manually
 
 First obtain the canonical skill directory from the
-[repository](https://github.com/smuniharish/langgraph-xai/tree/main/langgraph-xai-skills/skills/langgraph-xai).
+[repository](https://github.com/smuniharish/langgraph-xai/tree/master/langgraph-xai-skills/skills/langgraph-xai).
 Copy the complete `langgraph-xai` directory, including `SKILL.md`, into one
 of the host-specific locations below.
 
@@ -114,15 +135,35 @@ restart or reload the host.
 
 After installation, confirm all of the following:
 
-1. The directory name is `langgraph-xai`.
-2. `SKILL.md` is present in that directory.
-3. The host lists `langgraph-xai` as an available skill, if it exposes a
+1. The directory name is `langgraph-xai`, and it contains `SKILL.md`,
+   `references/`, `scripts/`, and `assets/`.
+2. The host lists `langgraph-xai` as an available skill, if it exposes a
    skill listing command or UI.
+3. From your project's Python environment, the setup check passes:
+
+    ```bash
+    python <skills directory>/langgraph-xai/scripts/verify_setup.py
+    ```
+
+    ```text
+    PASS  Python 3.14.7 (3.12 or newer required)
+    PASS  langgraph-xai 1.0.0 (1.x expected by this skill)
+    PASS  langgraph 1.2.12 (>=1.2.12,<2 required)
+    PASS  langchain-core 1.6.6 (>=1.6.6,<2 required)
+    INFO  optional integrations: langsmith 0.14.4, langfuse 4.16.0, opentelemetry-sdk 1.45.0, langchain-openai 1.6.7
+    PASS  instrumented graph recorded nodes ['score', 'route'], 2 state changes, 1 evidence, 1 decision
+    PASS  auditor explanation: The routing decision selected 'REVIEW'.
+    PASS  end-user explanation withholds the score and announces it
+    PASS  no instrumentation errors (0 recorded)
+    PASS  interrupt and resume recorded and linked through the checkpoint
+    All checks passed.
+    ```
+
 4. A task about LangGraph explainability, provenance, evidence, decisions,
-   disclosure policy, or instrumentation activates or can explicitly invoke
-   the skill.
+   disclosure policy, or instrumentation activates the skill, or you can
+   invoke it explicitly.
 
 See the distribution's
-[README](https://github.com/smuniharish/langgraph-xai/blob/main/langgraph-xai-skills/README.md)
-and [validation process](https://github.com/smuniharish/langgraph-xai/blob/main/langgraph-xai-skills/validation/README.md)
+[README](https://github.com/smuniharish/langgraph-xai/blob/master/langgraph-xai-skills/README.md)
+and [validation process](https://github.com/smuniharish/langgraph-xai/blob/master/langgraph-xai-skills/validation/README.md)
 for maintenance details.

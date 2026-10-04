@@ -1,0 +1,23 @@
+flowchart LR
+    classDef core fill:#eef4ff,stroke:#3567c7,color:#0f2547
+    classDef provider fill:#fff7e8,stroke:#c98a12,color:#0f2547
+    classDef outcome fill:#ecf8f1,stroke:#2f8f5b,color:#0f2547
+
+    record["record_* call<br/>or callback"]:::core
+    sanitize["sanitize_value<br/>credential keys withheld,<br/>values made JSON-safe"]:::core
+    artifact["Canonical model<br/>validated, versioned"]:::core
+    policy{"CapturePolicy<br/>allowed?"}:::provider
+    store["ProvenanceStore.write"]:::provider
+    observe["ObservabilityProvider.emit"]:::provider
+    dropped["Event dropped"]:::outcome
+    failure{"Operation failed<br/>or timed out?"}:::provider
+    open["fail_open: error kept in<br/>runtime.errors, graph continues"]:::outcome
+    closed["fail_closed / strict:<br/>XAIInstrumentationError"]:::outcome
+
+    record --> sanitize --> artifact --> policy
+    policy -- yes --> store --> observe
+    policy -- no --> dropped
+    store -.-> failure
+    observe -.-> failure
+    failure --> open
+    failure --> closed

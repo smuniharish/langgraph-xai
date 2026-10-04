@@ -1,52 +1,51 @@
 # LangSmith
 
-## Kid-level view
+`LangSmithObservability` sends `langgraph-xai` events to
+[LangSmith](https://smith.langchain.com) as a trace per run, next to the traces
+LangChain already produces.
 
-LangSmith traces what your LangChain/LangGraph code did. xgraph's
-`LangSmithObservability` adapter sends its own canonical events into that
-same trace tree — it does not replace LangSmith's own tracing.
-
-## Production view
-
-See [LangSmith comparison](langsmith-vs-langgraph-xai.md) for the precise
-division of responsibility: LangSmith owns tracing/debugging/evaluation of
-LangChain/LangGraph runs; xgraph owns the explainability semantic layer
-(evidence, decisions, attribution, policy-filtered explanations) that a
-trace alone does not capture.
-
-## Register the adapter
-
-```python
-from langsmith import Client
-from langgraph_xai import XAIRuntime
-from langgraph_xai.core.protocols import ObservabilityProvider
-from langgraph_xai.observability import LangSmithObservability
-
-runtime = XAIRuntime(graph_id="fraud-review")
-runtime.register(
-    ObservabilityProvider,
-    LangSmithObservability(Client(), project_name="fraud-review"),
-)
-
-graph = runtime.instrument(compiled_graph)
-result = await graph.ainvoke({"transaction_id": "tx_9182"})
-
-await runtime.flush()
+```bash
+pip install "langgraph-xai[langsmith]"
 ```
 
-Requires the `langsmith` extra: `uv add "langgraph-xai[langsmith]"`.
+```python
+from langgraph_xai import LangSmithObservability, ObservabilityProvider
 
-## What actually gets sent
+xai.register(ObservabilityProvider, LangSmithObservability(project_name="fraud-review"))
+```
 
-Every canonical event becomes one LangSmith run
-(`client.create_run(name=event.event_type, run_type="chain", ...)`), with
-`trace_id`/`parent_run_id` carried over from the event's
-`ExecutionContext` so xgraph's runs correlate with (rather than duplicate)
-LangSmith's own automatic tracing of the underlying LangGraph execution.
+Without a `client`, the adapter creates `langsmith.Client()`, which reads
+`LANGSMITH_API_KEY` (and `LANGSMITH_ENDPOINT` for self-hosted LangSmith) from
+the environment. To reuse a configured client, pass `client=`.
 
-## Common mistakes
+## What appears in LangSmith
 
-Do not rely on this adapter to reconstruct evidence/decision/attribution
-records after the fact from a LangSmith trace — record those explicitly
-with `runtime.record_evidence(...)`/`runtime.record_decision(...)`; the
-observability adapter only mirrors canonical events, it does not derive them.
+| LangSmith run | Contents |
+| --- | --- |
+| Root run `langgraph-xai: <graph_id>` | One per `langgraph-xai` run. The trace ID is the `run_id`. Inputs are the application, tenant, and graph IDs. |
+| One child run per event | Named after the event type (`node.execution`, `state.transition`, `tool.execution`, ...). Inputs are the canonical event JSON, and metadata holds the `xai.*` correlation fields. |
+
+The root run ends when the run completes, fails, or is interrupted. Its outputs
+record the final status, and a failure also records the error. Runs are
+submitted through LangSmith's background batching, so the graph is never
+blocked on the network.
+
+## Alongside LangChain tracing
+
+With `LANGSMITH_TRACING=true`, LangChain traces the graph itself: every node,
+model call, and token count. The adapter adds a second trace for the same call
+that contains the explainability records. Find it by searching the project for
+metadata `xai.run_id`, or by `trace_id` if you pass one in the config. See
+[LangSmith and langgraph-xai](langsmith-vs-langgraph-xai.md) for how the two
+complement each other.
+
+## Lifecycle
+
+```python
+await xai.flush()  # send buffered runs, for example at the end of a batch job
+await xai.close()  # flush, then close the client the adapter created
+```
+
+A client you pass in is flushed but never closed. The adapter tracks up to
+`max_open_traces` recent runs (1024 by default), so a long-running process uses
+bounded memory.

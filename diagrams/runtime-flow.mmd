@@ -1,7 +1,33 @@
-flowchart LR
-    Graph[LangGraph execution] --> Boundary[Supported boundary]
-    Boundary --> Runtime[Explicit runtime]
-    Runtime --> Canonical[Canonical artifacts]
-    Canonical --> Policy[Disclosure policy]
-    Policy --> Store[Storage or export]
-    Policy --> Explain[Explanation assembly]
+sequenceDiagram
+    autonumber
+    actor Caller
+    participant Proxy as InstrumentedGraph
+    participant Runtime as XAIRuntime
+    participant Graph as LangGraph graph
+    participant Handler as Callback handler
+    participant Sinks as Store + observability
+
+    Caller->>Proxy: ainvoke(input, config)
+    opt Checkpointed thread, input is None or a Command
+        Proxy->>Graph: aget_state(config)
+    end
+    Proxy->>Runtime: start_run(config, continuation_of)
+    Runtime->>Sinks: Execution (running), execution.started
+    opt Continuing a thread
+        Proxy->>Runtime: record_checkpoint (restored), resume interaction
+    end
+    Proxy->>Graph: ainvoke(input, config + handler + run ID)
+    loop Every node, tool, and retriever
+        Graph->>Handler: on_chain_start / on_tool_end / on_retriever_end ...
+        Handler->>Runtime: record_state_delta, record_node, record_tool, record_retrieval
+        Runtime->>Sinks: state.transition, node.execution, tool.execution, ...
+    end
+    Note over Graph,Handler: Nodes may also call<br/>record_evidence and record_decision
+    Graph-->>Proxy: output, exception, or interrupt
+    opt Checkpointed thread, call not cancelled
+        Proxy->>Graph: aget_state(config)
+        Proxy->>Runtime: record_checkpoint (last written)
+    end
+    Proxy->>Runtime: finish_run(..., interrupts, pending_nodes)
+    Runtime->>Sinks: execution.completed / execution.failed / interrupt, final Execution
+    Proxy-->>Caller: the graph's output, unchanged

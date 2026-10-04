@@ -1,50 +1,19 @@
 # Explanation engines
 
-An `ExplanationEngine` assembles a final `Explanation` from a
-policy-filtered `ExplanationContext`. It is the last step of
-`runtime.explain(...)`.
-
-## `StructuredExplanationEngine` (default)
-
-Renders reasons/factors/evidence directly from canonical fields —
-deterministic, free, and requires no LLM (`requires_llm = False`). See
-[Concepts: Explanations](../concepts/explanations.md) for a full real
-output.
-
-## `LLMExplanationEngine` (opt-in)
-
-Phrases an *already-assembled* structured explanation through an injected
-LangChain chat model or runnable — it never invents facts, since its output
-is validated against a strict schema before use:
+Engines that render an `Explanation` from a policy-filtered
+`ExplanationContext`. The structured engine is the default. See
+[Explanations](../concepts/explanations.md) and
+[LLM-phrased explanations](../how-to/llm-explanations.md).
 
 ```python
-from langchain_openai import ChatOpenAI
-from langgraph_xai.explanation import LLMExplanationEngine
-from langgraph_xai.core.protocols import ExplanationEngine
-from langgraph_xai import XAIConfig
+from langgraph_xai import ExplanationEngine, LLMExplanationEngine, XAIConfig, XAIRuntime
 
-runtime = XAIRuntime(config=XAIConfig(llm_explanation_enabled=True))
-runtime.register(
-    ExplanationEngine,
-    LLMExplanationEngine(ChatOpenAI(model="gpt-4o-mini"), enabled=True, timeout=30.0),
-)
+xai = XAIRuntime(XAIConfig(llm_explanation_enabled=True))
+xai.register(ExplanationEngine, LLMExplanationEngine(chat_model, enabled=True))
 ```
 
-Requires `XAIConfig.llm_explanation_enabled=True` (checked before every
-call) *and* `enabled=True` on the engine itself — two independent switches,
-so enabling the config flag alone is not enough to start making live model
-calls. The model's raw response is parsed into an `ExplanationDraft` — a
-strict, three-field (`summary`, `reasons`, `disclosure`) schema with
-`extra="forbid"` — before being merged back into the structured result;
-policy-withheld fields (e.g. `reasons` when denied) are restored from the
-structured engine's output regardless of what the model returned. See
-[Enable live LLM explanations](../how-to/llm-explanations.md) for the full
-walkthrough and [failure-mode interaction](../how-to/failure-modes.md).
+::: langgraph_xai.explanation.engines.StructuredExplanationEngine
 
-## Reference
+::: langgraph_xai.explanation.engines.LLMExplanationEngine
 
-::: langgraph_xai.explanation.StructuredExplanationEngine
-
-::: langgraph_xai.explanation.LLMExplanationEngine
-
-::: langgraph_xai.explanation.ExplanationDraft
+::: langgraph_xai.explanation.engines.ExplanationDraft

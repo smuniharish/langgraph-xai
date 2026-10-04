@@ -1,60 +1,73 @@
 # OpenTelemetry
 
-## Kid-level view
+`OpenTelemetryObservability` turns each `langgraph-xai` event into an
+OpenTelemetry span. Any OTLP-compatible backend can then store and query the
+explainability record next to your other telemetry: Jaeger, Grafana Tempo,
+Honeycomb, Datadog, or an OpenTelemetry Collector.
 
-OpenTelemetry supplies shared labels for operations. It does not decide what
-an explanation means.
-
-## Production view
-
-Use trace/span context for correlation and export only policy-approved IDs or
-summaries through an opt-in adapter. Artifact schemas, evidence semantics,
-redaction, and retention remain runtime/application responsibilities.
-
-![Observability boundary](../assets/diagrams/observability-boundary.png)
-
-## Register the adapter
-
-```python
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-
-from langgraph_xai import XAIRuntime
-from langgraph_xai.core.protocols import ObservabilityProvider
-from langgraph_xai.observability import OpenTelemetryObservability
-
-provider = TracerProvider()
-provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
-trace.set_tracer_provider(provider)
-
-runtime = XAIRuntime(graph_id="fraud-review")
-runtime.register(
-    ObservabilityProvider,
-    OpenTelemetryObservability(trace.get_tracer("fraud-review"), owns_provider=True),
-)
-
-graph = runtime.instrument(compiled_graph)
-result = await graph.ainvoke({"transaction_id": "tx_9182"})
-
-await runtime.close()  # force_flush + shutdown, since owns_provider=True
+```bash
+pip install "langgraph-xai[otel]" opentelemetry-exporter-otlp-proto-http
 ```
 
-Requires the `opentelemetry` extra: `uv add "langgraph-xai[opentelemetry]"`.
-Works with **any** configured exporter (console, OTLP, Jaeger, Zipkin, …) —
-the adapter depends only on the standard `Tracer`/`Span` API, never on a
-specific backend.
+The `otel` extra installs the OpenTelemetry API and SDK. Install the exporter
+for your backend separately.
 
-## What actually gets sent
+```python
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-Every canonical event becomes one OTel span (`event.event_type` as the span
-name), with correlation fields (`run_id`, `trace_id`, `application_id`,
-`tenant_id`) and the canonical JSON payload set as span attributes
-(`xai.event_type`, `xai.payload`). Pass `owns_provider=True` only when
-xgraph created the `TracerProvider` itself — otherwise `flush()`/`close()`
-on the runtime leave your application's own provider lifecycle untouched.
+from langgraph_xai import ObservabilityProvider, OpenTelemetryObservability
 
-## Common mistakes
+provider = TracerProvider()
+provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))  # OTEL_EXPORTER_OTLP_ENDPOINT
+xai.register(
+    ObservabilityProvider,
+    OpenTelemetryObservability(tracer_provider=provider, owns_provider=True),
+)
+```
 
-Never treat a span as evidence, export raw payloads by default, or assume an
-OTLP endpoint is an authorization boundary.
+## What is exported
+
+Each event is a zero-duration span named after its event type and stamped with
+the event's own timestamp. Its parent is whatever span is current when the event
+is recorded, so the events nest inside your application's existing traces.
+Creating the span never changes the current span.
+
+Real output from one instrumented call, captured with the SDK's in-memory
+exporter:
+
+```text
+['execution.started', 'state.transition', 'node.execution', 'execution.completed']
+```
+
+Attributes of the `node.execution` span:
+
+```json
+{
+  "xai.event_id": "a490eded-7b34-45c3-a39b-974d175d4d86",
+  "xai.event_type": "node.execution",
+  "xai.application_id": "payments",
+  "xai.tenant_id": "acme-bank",
+  "xai.graph_id": "fraud-review",
+  "xai.run_id": "59e70028-a463-4688-ad68-a23c9fcae8ca",
+  "xai.trace_id": "req-8841"
+}
+```
+
+`xai.event_id` is the event's `id`. In addition, `xai.payload` holds the
+complete canonical event as JSON. Its keys are `context`, `event_type`, `id`,
+`node`, `schema_version`, `sequence`, and `timestamp`. `xai.thread_id` and
+`xai.checkpoint_id` are added when the run has them.
+
+## Provider ownership
+
+| Constructor | Tracer from | `flush()` | `close()` |
+| --- | --- | --- | --- |
+| `OpenTelemetryObservability()` | The global tracer provider | No-op | No-op |
+| `OpenTelemetryObservability(tracer_provider=p)` | `p` | Flushes `p` | No-op |
+| `OpenTelemetryObservability(tracer_provider=p, owns_provider=True)` | `p` | Flushes `p` | Shuts `p` down |
+| `OpenTelemetryObservability(tracer)` | The given tracer | No-op | No-op |
+
+Call `await xai.close()` at shutdown, so batched spans are exported before the
+process exits.

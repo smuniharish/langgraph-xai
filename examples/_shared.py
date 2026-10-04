@@ -1,61 +1,41 @@
-"""Shared local helpers for executable examples."""
+"""Helpers shared by the example scripts."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from typing import TypedDict
+import json
+import os
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Any
 
-from langgraph.graph import END, START, StateGraph
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
-from langgraph_xai import (
-    Decision,
-    DecisionFactor,
-    Execution,
-    ExecutionStatus,
-    ExplanationContext,
-    XAIRuntime,
-)
+    from langchain_openai import ChatOpenAI
 
 
-class DemoState(TypedDict, total=False):
-    query: str
-    answer: str
-    risk_score: float
-    attempts: int
-    approved: bool
+@asynccontextmanager
+async def chat_model() -> AsyncGenerator[ChatOpenAI, None]:
+    """Yield the chat model used by the LLM-backed examples, closing its connections on exit.
 
+    Configuration comes from the standard OpenAI environment variables, so any
+    OpenAI-compatible endpoint works:
 
-def compiled_graph(node, *, name: str = "work"):
-    builder = StateGraph(DemoState)
-    builder.add_node(name, node)
-    builder.add_edge(START, name)
-    builder.add_edge(name, END)
-    return builder.compile()
+    - ``OPENAI_API_KEY`` (required)
+    - ``OPENAI_BASE_URL`` (optional, for OpenAI-compatible gateways)
+    - ``OPENAI_MODEL`` (optional, defaults to ``gpt-4o-mini``)
+    """
+    if not os.getenv("OPENAI_API_KEY"):
+        raise SystemExit("Set OPENAI_API_KEY (and optionally OPENAI_BASE_URL and OPENAI_MODEL).")
+    import openai
+    from langchain_openai import ChatOpenAI
 
-
-async def explain_result(
-    runtime: XAIRuntime,
-    action: str,
-    *factors: DecisionFactor,
-) -> str:
-    context = runtime.context_from_config()
-    execution = Execution(
-        context=context,
-        status=ExecutionStatus.COMPLETED,
-        started_at=datetime.now(UTC),
-        ended_at=datetime.now(UTC),
-    )
-    decision = Decision(
-        context=context,
-        decision_type="routing",
-        selected_action=action,
-        factors=list(factors),
-    )
-    explanation = await runtime.explain(
-        ExplanationContext(
-            execution=execution,
-            decision=decision,
-            audience="end_user",
+    async with openai.DefaultAsyncHttpxClient() as http_client:
+        yield ChatOpenAI(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), http_async_client=http_client
         )
-    )
-    return explanation.summary
+
+
+def show(title: str, payload: Any) -> None:
+    """Print a titled, indented JSON block."""
+    print(f"\n--- {title} ---")
+    print(json.dumps(payload, indent=2, default=str))

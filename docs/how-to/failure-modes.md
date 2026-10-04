@@ -1,61 +1,90 @@
-# How to configure failure modes
+# Configure failure modes
 
-**Goal:** choose how xgraph's *own* instrumentation should behave when it
-fails internally (a storage write times out, an observability exporter is
-unreachable, an attribution/explanation engine raises) — separately from
-whatever your graph itself does.
-
-## The three modes
-
-| `XAIConfig.failure_mode` | Behavior when an internal xgraph operation raises |
-| --- | --- |
-| `fail_open` (default) | The exception is recorded in `runtime.errors` and swallowed; your graph's `ainvoke`/`explain` call still returns normally. Use this when explainability must never take down the application. |
-| `fail_closed` | The exception is wrapped in `XAIInstrumentationError` and re-raised from the call site that triggered it. Use this when explainability is a release/compliance gate and a silent gap is unacceptable. |
-| `strict` | Same as `fail_closed`, **plus** additional configuration checks: recording an execution or provenance artifact requires at least one registered `ProvenanceStore` or `ObservabilityProvider`, and recording a semantic artifact (evidence, a decision, an attribution result, …) requires at least one registered plugin. Use this to catch a misconfigured runtime — for example, an instrumented graph with nothing registered to receive its output — as early as possible, rather than only when an operation fails at runtime. |
-
-## Steps
+Explainability infrastructure can fail: a database is down, an exporter times
+out, a custom policy has a bug. `XAIConfig.failure_mode` decides whether such a
+failure may affect your graph.
 
 ```python
-from langgraph_xai import XAIConfig, XAIRuntime
-
-runtime = XAIRuntime(config=XAIConfig(failure_mode="fail_closed"))
+xai = XAIRuntime(XAIConfig(failure_mode=FailureMode.FAIL_CLOSED))
 ```
 
-Set it once per runtime, matching that application's release posture — there
-is deliberately no environment-variable override (see
-[ADR-019](../architecture/decisions.md#adr-019-core-configuration-is-explicit-and-per-runtime-not-environment-driven)):
-construct a different `XAIConfig` explicitly wherever behavior needs to
-differ (for example, a stricter mode in a staging/compliance environment than
-in a quick local prototype).
+## The three modes, side by side
 
-## Real, observed behavior for all three modes
+The [failure modes example](https://github.com/smuniharish/langgraph-xai/blob/master/examples/failure_modes.py)
+runs the same one-node graph against a store whose backend is down:
 
-Run against the *same* deliberately broken `ProvenanceStore`
-(`ConnectionError` on every write):
+```python
+class UnavailableStore(InMemoryProvenanceStore):
+    async def write(self, item: object) -> None:
+        raise ConnectionError("storage backend unavailable")
+```
+
+Real output:
 
 ```text
---- failure_mode='fail_open' ---
-ainvoke succeeded despite the broken store: {'value': 2}
-runtime captured 5 suppressed error(s):
-  - ConnectionError: simulated storage outage
-  ...
+--- failure_mode=fail_open ---
+graph call returned {'value': 2}
+runtime.errors holds 6 error(s); first: ConnectionError('storage backend unavailable')
 
---- failure_mode='fail_closed' ---
-ainvoke raised as expected: XAIInstrumentationError: instrumentation operation failed
-__cause__: ConnectionError: simulated storage outage
+--- failure_mode=fail_closed ---
+graph call raised XAIInstrumentationError: instrumentation operation failed: ConnectionError: storage backend unavailable
+runtime.errors holds 1 error(s); first: ConnectionError('storage backend unavailable')
 
---- failure_mode='strict' ---
-ainvoke raised as expected: XAIInstrumentationError: instrumentation operation failed
-__cause__: ConnectionError: simulated storage outage
+--- failure_mode=strict ---
+graph call raised XAIInstrumentationError: instrumentation operation failed: ConnectionError: storage backend unavailable
+runtime.errors holds 1 error(s); first: ConnectionError('storage backend unavailable')
 ```
 
-Source: [`examples/failure_modes_real.py`](https://github.com/samamuniharish/langgraph-xai/blob/main/examples/failure_modes_real.py).
+- **`fail_open`**: the graph returned its normal result. Each of the six failed
+  writes was kept in `xai.errors`: the execution at start and at finish, and
+  four events.
+- **`fail_closed`**: the first failed write, the execution record at the start
+  of the run, raised `XAIInstrumentationError` from the graph call. The cause
+  is chained as `__cause__`.
+- **`strict`**: the same as `fail_closed`. Strict mode also rejects records that
+  would be dropped silently: evidence and decisions require at least one
+  [plugin](../architecture/plugins.md), and execution records require a store
+  or an observability provider.
 
-```bash
-uv run python examples/failure_modes_real.py
+## What counts as an instrumentation failure
+
+Store writes, observability emits, capture-policy evaluation, plugin delivery,
+and the custom state-capture callable. Each operation is bounded by
+`operation_timeout_seconds`, including the wait for one of `max_concurrency`
+slots, so a slow backend becomes a `TimeoutError` instead of a stalled graph.
+
+Your graph's own exceptions are never affected. A node that raises fails the
+call exactly as it would without instrumentation, in every mode.
+
+## Explanations always fail closed
+
+`explain` and `explain_decision` raise `XAIInstrumentationError` in every mode
+when the exposure policy, attribution, or explanation engine fails. Returning a
+partial explanation, or one no policy has checked, would defeat the purpose of
+the policy.
+
+## Choosing a mode
+
+| Situation | Mode |
+| --- | --- |
+| Explainability supports the product but must never take it down | `fail_open`, and alert on `xai.errors` |
+| An action may not happen without its audit record, as in regulated approvals | `fail_closed` |
+| Records must never be dropped silently, as in a test suite or audit pipeline | `strict` |
+
+Different graphs can use different modes. Create one runtime per graph or per
+boundary, because configuration is per runtime.
+
+## Monitoring fail-open
+
+`xai.errors` holds the 100 most recent failures, oldest first, in every mode.
+Export its length as a metric or log new entries after each call:
+
+```python
+errors_before = len(xai.errors)
+result = await graph.ainvoke(payload)
+for error in xai.errors[errors_before:]:
+    logger.warning("explainability failure: %r", error)
 ```
 
-Note that `runtime.errors` (a bounded deque, most recent 100) is populated in
-**every** mode — even `fail_closed`/`strict` append the error before
-re-raising — so you can inspect the underlying cause without relying solely
-on the raised exception's traceback.
+Once 100 failures are held, the oldest are dropped. For exact counting,
+monitor the store and exporter themselves.

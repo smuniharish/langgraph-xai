@@ -1,95 +1,118 @@
 # Execution
 
-## Kid-level view
+An `Execution` is the record of one instrumented call, such as one `invoke`,
+`stream`, or `astream_events`, or one input of a `batch`. Instrumentation builds
+it automatically while the graph runs. You never construct it yourself.
 
-Execution is the play-by-play: which graph run and node happened, in what
-order, and when.
+## Lifecycle
 
-## Production view
+When a call starts, the runtime records an `Execution` with status `running`.
+When it ends, the status becomes one of:
 
-An execution record identifies a run, parent/child boundary, node or event
-kind, sequence, status, and correlation identifiers. It should be stable
-enough to join artifacts without copying full graph state.
+| Status | When |
+| --- | --- |
+| `completed` | The graph returned normally. |
+| `failed` | The graph raised. The exception type and message are added to `exceptions`. |
+| `cancelled` | The task was cancelled, the caller pressed Ctrl+C, or a stream was closed before it finished. |
+| `interrupted` | A node called LangGraph's `interrupt()`, or the graph stopped at a static breakpoint (`interrupt_before` or `interrupt_after`). The pause is added to `human_interactions`, with the interrupt's payload or the pending nodes. |
 
-## Why and architecture
+Resuming an interrupted thread with `Command(resume=...)` is a new call, so it
+produces a new `Execution`. That run records a `resume` interaction carrying the
+answer, and both runs share the thread's `thread_id`. When the graph has a
+checkpointer, the resumed run's `continuation_of` is the `run_id` of the run
+that paused. See [Human-in-the-loop](../how-to/interrupts.md).
 
-The runtime observes supported LangGraph boundaries and emits execution
-records; the canonical model then links evidence and decisions to those
-records. This keeps execution facts separate from interpretation.
+## What is captured
 
-## Real example: input and output
+| Field | Contains | Recorded |
+| --- | --- | --- |
+| `context` | Application, tenant, graph, run, thread, trace, and checkpoint IDs | At start |
+| `continuation_of` | The `run_id` of the run this call resumed, retried, or replayed | At start, for a graph with a checkpointer |
+| `nodes` | One `NodeExecution` per node run: status, start and end time, retry `attempt`, `parent_node_id` for subgraph nodes, and the LangGraph step | Automatically |
+| `state_transitions` | One `StateTransition` per node that changed state, filtered by the [capture mode](../getting-started/configuration.md#state-capture) | Automatically |
+| `tools` | One `ToolExecution` per tool call: name, `tool_call_id`, status (`succeeded`, `failed`, `timed_out`, `cancelled`), and latency | Automatically |
+| `retrievals` | One `RetrievalExecution` per retriever call, with ranked documents (ID, score, source) | Automatically |
+| `human_interactions` | Interrupts, with their payload, and resumes, with the answer | Automatically; use `record_human_interaction` for approvals made outside the graph |
+| `exceptions` | The error that failed or cancelled the run | Automatically |
+| `memory` | Reads and writes of long-term memory, by reference | `record_memory` |
+| `checkpoints` | The checkpoint the run continued from (`restored`) and the last checkpoint it wrote | Automatically for a graph with a checkpointer; `record_checkpoint` otherwise |
 
-Automatic instrumentation (`runtime.instrument(graph)`) populates this
-record for you on every `ainvoke`/`astream` call. The snippet below shows the
-same shape built explicitly with the recording API, to make the input/output
-correspondence clear:
+Payloads stay out of the record. Tool inputs and outputs, document text, and
+memory contents are referenced by ID or URI, never copied.
 
-```python
-run = await runtime.start_run({"metadata": {"trace_id": "trace-8841"}})
-await runtime.record_state_delta(
-    "score_transaction", {"risk_score": 0.0}, {"risk_score": 0.91}, run=run
-)
-await runtime.record_tool(
-    "fraud_detector",
-    status="succeeded",
-    latency_ms=42.5,
-    output_reference="fraud-detector://run/8841/score",
-    run=run,
-)
-await runtime.finish_run(run)
-```
+## Example
 
-Real captured `Execution`, produced by
-[`examples/canonical_model_gallery.py`](https://github.com/samamuniharish/langgraph-xai/blob/main/examples/canonical_model_gallery.py):
+The [fraud review example](../examples/full-explanation.md) runs three nodes.
+Its captured execution, summarized:
 
 ```json
 {
-  "schema_version": "1.0.0",
-  "context": {
-    "schema_version": "1.0.0",
-    "application_id": "application",
-    "tenant_id": "default",
-    "graph_id": "fraud-review",
-    "run_id": "399cf04f-e561-443d-a183-06775e05edd2",
-    "trace_id": "trace-8841",
-    "metadata": { "trace_id": "trace-8841" }
-  },
-  "status": "completed",
-  "started_at": "2026-09-17T10:13:29.587563Z",
-  "ended_at": "2026-09-17T10:13:29.588039Z",
-  "nodes": [],
-  "state_transitions": [
-    {
-      "node_id": "score_transaction",
-      "changes": [{ "path": "risk_score", "before": 0.0, "after": 0.91 }],
-      "capture_mode": "delta"
-    }
+  "nodes": [
+    "fetch_transaction: completed",
+    "score_risk: completed",
+    "route: completed"
   ],
-  "tools": [
-    {
-      "tool_id": "fraud_detector",
-      "tool_name": "fraud_detector",
-      "status": "succeeded",
-      "output_reference": "fraud-detector://run/8841/score",
-      "retry_count": 0,
-      "latency_ms": 42.5
-    }
-  ],
-  "retrievals": [],
-  "memory": [],
-  "checkpoints": [],
-  "human_interactions": [],
-  "exceptions": []
+  "state_changes": [
+    "fetch_transaction: amount None -> 9200.0",
+    "score_risk: risk_score None -> 0.91",
+    "route: route None -> 'HUMAN_REVIEW'"
+  ]
 }
 ```
 
-(Fields trimmed for brevity are repeated nested `context`/`schema_version`
-values, identical to the top-level ones shown above.)
+Retrievers and tools are captured without any code in the nodes. From the
+[retrieval and tools example](../examples/retrieval-and-tools.md), which uses a
+LangChain retriever and LangGraph's `ToolNode`:
 
-## Mistakes to avoid
+```json
+{
+  "retriever": "policy-index",
+  "documents": [
+    {"document_id": "refund-policy#3", "rank": 1, "score": 0.92, "content_reference": "kb://policies/refunds#3"},
+    {"document_id": "shipping-policy#1", "rank": 2, "score": 0.41, "content_reference": "kb://policies/shipping#1"}
+  ]
+}
+```
 
-Use a run ID plus node ID and an explicit `completed` event. Avoid relying on
-wall-clock order alone, recording arbitrary state blobs, or claiming that an
-observed event explains causality.
+```json
+{
+  "tool_name": "order_status",
+  "tool_call_id": "call_7Qk2",
+  "status": "succeeded",
+  "latency_ms": 1.2904999894089997
+}
+```
 
+`tool_call_id` is the ID the model assigned to the call, so a tool execution can
+be matched to the message that requested it.
 
+## Events
+
+Every captured fact is also emitted as an event, in order, to the store and the
+observability provider:
+
+| Event type | Emitted when |
+| --- | --- |
+| `execution.started` | A run starts |
+| `node.execution` | A node finishes, fails, or is interrupted |
+| `state.transition` | A node's state change is recorded |
+| `tool.execution` | A tool call finishes |
+| `retrieval.execution` | A retriever call finishes |
+| `interrupt` | A human interaction (interrupt, resume, approval, ...) is recorded |
+| `checkpoint` | A checkpoint is linked to the run |
+| `execution.completed` / `execution.failed` | A run completes, or fails or is cancelled |
+
+Each event carries the run's `ExecutionContext` and a `sequence` number that
+orders events within the run. A [capture policy](policies.md#capture-policy)
+can drop events before they are stored or emitted.
+
+## Nested graphs and agents
+
+Subgraphs, `create_agent` agents called inside a node, and `deepagents` run in
+the same call, so their nodes, tools, and retrievers land in the same
+`Execution`. Nodes of a subgraph have `parent_node_id` set to the node that
+called it. Internal LangChain runnables that are not graph nodes, such as the
+chat model inside an agent's model node, are not recorded as nodes.
+
+An instrumented graph called from inside another instrumented graph of the same
+runtime is recorded as part of the outer run, not as a second run.

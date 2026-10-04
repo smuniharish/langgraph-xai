@@ -1,4 +1,4 @@
-"""Plugin contracts for artifacts outside the core sink protocols."""
+"""Plugin contract for semantic artifacts recorded outside the core sinks."""
 
 from __future__ import annotations
 
@@ -20,10 +20,22 @@ type SemanticArtifact = (
 
 @runtime_checkable
 class XAIPlugin(Protocol):
-    """An optional, instance-scoped consumer of explicit semantic artifacts."""
+    """An instance-scoped consumer of semantic artifacts.
 
-    async def record(self, artifact: SemanticArtifact) -> None: ...
+    Evidence, decisions, memory references, and artifacts passed to
+    `XAIRuntime.record_artifact` are delivered to every registered plugin as they
+    are recorded. Implement this to persist them, forward them to a review
+    queue, or index them for search.
+    """
 
-    async def flush(self) -> None: ...
+    async def record(self, artifact: SemanticArtifact) -> None:
+        """Receive one semantic artifact."""
+        ...
 
-    async def close(self) -> None: ...
+    async def flush(self) -> None:
+        """Deliver any buffered artifacts."""
+        ...
+
+    async def close(self) -> None:
+        """Flush and release resources."""
+        ...

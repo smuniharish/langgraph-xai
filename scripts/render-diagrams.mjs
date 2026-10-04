@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, promises as fs } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync, spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceDirectory = join(root, "diagrams");
@@ -10,7 +10,12 @@ const outputDirectory = join(root, "docs", "assets", "diagrams");
 const configPath = join(sourceDirectory, "mermaid-config.json");
 const manifestPath = join(outputDirectory, "manifest.json");
 const checkOnly = process.argv.includes("--check");
-const requiredMermaidVersion = "11.17.0";
+// Diagrams are rendered with exactly this Mermaid CLI version, installed globally;
+// the manifest records it.
+const requiredMermaidVersion = "12.0.0";
+// Puppeteer's install script downloads the headless browser the CLI renders with.
+const installCommand = `npm install --global --allow-scripts=puppeteer @mermaid-js/mermaid-cli@${requiredMermaidVersion}`;
+const renderOptions = { scale: 2, background: "white" };
 
 async function listMermaidFiles(directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true });
@@ -24,40 +29,44 @@ async function listMermaidFiles(directory) {
   return files.flat().sort((left, right) => left.localeCompare(right, "en"));
 }
 
-function render(source, output) {
-  const localCli = join(root, "node_modules", "@mermaid-js", "mermaid-cli", "src", "cli.js");
-  const globalRoot =
-    process.platform === "win32"
-      ? join(process.env.APPDATA ?? "", "npm", "node_modules")
-      : execFileSync("npm", ["root", "--global"], {
-          encoding: "utf8",
-          windowsHide: true,
-        }).trim();
-  const globalCli = join(globalRoot, "@mermaid-js", "mermaid-cli", "src", "cli.js");
-  const globalPackage = join(globalRoot, "@mermaid-js", "mermaid-cli", "package.json");
-  const cli = existsSync(localCli) ? localCli : globalCli;
+async function installedCli() {
+  let globalModules;
+  try {
+    globalModules = execSync("npm root --global", { encoding: "utf8" }).trim();
+  } catch {
+    throw new Error(`npm was not found. Install Node.js, then run \`${installCommand}\`.`);
+  }
+  const cliPackage = join(globalModules, "@mermaid-js", "mermaid-cli");
+  const cli = join(cliPackage, "src", "cli.js");
   if (!existsSync(cli)) {
+    throw new Error(`Mermaid CLI is not installed. Run \`${installCommand}\`.`);
+  }
+  const installed = JSON.parse(await fs.readFile(join(cliPackage, "package.json"), "utf8")).version;
+  if (installed !== requiredMermaidVersion) {
     throw new Error(
-      "Mermaid CLI is not installed. Install @mermaid-js/mermaid-cli@11.17.0 globally " +
-        "before rendering documentation diagrams.",
+      `Mermaid CLI ${requiredMermaidVersion} is required; found ${installed}. Run \`${installCommand}\`.`,
     );
   }
-  if (!existsSync(localCli)) {
-    const installed = execFileSync(
-      process.execPath,
-      ["-e", `process.stdout.write(require(${JSON.stringify(globalPackage)}).version)`],
-      { encoding: "utf8" },
-    ).trim();
-    if (installed !== requiredMermaidVersion) {
-      throw new Error(
-        `Mermaid CLI ${requiredMermaidVersion} is required; found ${installed}.`,
-      );
-    }
-  }
+  return cli;
+}
+
+function render(cli, source, output) {
   return new Promise((resolveRender, reject) => {
     const child = spawn(
       process.execPath,
-      [cli, "-i", source, "-o", output, "-c", configPath, "-b", "transparent"],
+      [
+        cli,
+        "-i",
+        source,
+        "-o",
+        output,
+        "-c",
+        configPath,
+        "-b",
+        renderOptions.background,
+        "-s",
+        String(renderOptions.scale),
+      ],
       { cwd: root, shell: false, stdio: "inherit" },
     );
     child.on("error", reject);
@@ -69,7 +78,9 @@ function render(source, output) {
 }
 
 async function checksum(path) {
-  return createHash("sha256").update(await fs.readFile(path)).digest("hex");
+  // Hash with LF line endings so CRLF and LF checkouts of the same sources agree.
+  const text = (await fs.readFile(path, "utf8")).replace(/\r\n/g, "\n");
+  return createHash("sha256").update(text).digest("hex");
 }
 
 const files = await listMermaidFiles(sourceDirectory);
@@ -78,6 +89,7 @@ await fs.mkdir(outputDirectory, { recursive: true });
 const configChecksum = await checksum(configPath);
 const expectedManifest = {
   mermaidVersion: requiredMermaidVersion,
+  renderOptions,
   configChecksum,
   sources: Object.fromEntries(
     await Promise.all(
@@ -85,6 +97,10 @@ const expectedManifest = {
     ),
   ),
 };
+const expectedImages = new Set(files.map((source) => `${basename(source, ".mmd")}.png`));
+const orphanImages = (await fs.readdir(outputDirectory)).filter(
+  (name) => name.endsWith(".png") && !expectedImages.has(name),
+);
 
 if (checkOnly) {
   if (!existsSync(manifestPath)) {
@@ -94,14 +110,20 @@ if (checkOnly) {
   if (JSON.stringify(actualManifest) !== JSON.stringify(expectedManifest)) {
     throw new Error("Diagram sources, configuration, or renderer version are stale.");
   }
+  if (orphanImages.length > 0) {
+    throw new Error(`Rendered diagrams without a source: ${orphanImages.join(", ")}`);
+  }
+} else {
+  await Promise.all(orphanImages.map((name) => fs.rm(join(outputDirectory, name))));
 }
 
+const cli = checkOnly ? null : await installedCli();
 for (const source of files) {
   const output = join(outputDirectory, `${basename(source, ".mmd")}.png`);
   if (checkOnly) {
     if (!existsSync(output)) throw new Error(`Missing rendered diagram: ${relative(root, output)}`);
   } else {
-    await render(source, output);
+    await render(cli, source, output);
   }
 }
 

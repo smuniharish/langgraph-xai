@@ -1,67 +1,50 @@
-"""Opt-in smoke test for an OpenAI-compatible explanation model."""
+"""Opt-in smoke test for an OpenAI-compatible explanation model.
+
+Set ``XAI_TEST_LLM_API_KEY`` (and optionally ``XAI_TEST_LLM_MODEL`` and
+``XAI_TEST_LLM_BASE_URL``) to run it. A dedicated variable is used so that a
+globally configured ``OPENAI_API_KEY`` never triggers paid calls in a normal
+test run.
+"""
 
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
 
 import pytest
 
-from langgraph_xai.core import (
-    Decision,
-    DecisionFactor,
-    Execution,
-    ExecutionContext,
-    ExecutionStatus,
-    ExplanationContext,
-)
-from langgraph_xai.explanation import LLMExplanationEngine
+from langgraph_xai import DecisionFactor, LLMExplanationEngine, XAIConfig, XAIRuntime
+from langgraph_xai.core import ExplanationEngine
 
 pytestmark = pytest.mark.live
 
 
-@pytest.mark.asyncio
-async def test_openai_compatible_llm_returns_grounded_explanation() -> None:
-    api_key = os.getenv("EXPLABS_API_KEY")
+async def test_llm_explanation_is_grounded_in_the_recorded_decision() -> None:
+    api_key = os.getenv("XAI_TEST_LLM_API_KEY")
     if not api_key:
-        pytest.skip("EXPLABS_API_KEY is not configured")
+        pytest.skip("XAI_TEST_LLM_API_KEY is not configured")
     langchain_openai = pytest.importorskip("langchain_openai")
-    model = langchain_openai.ChatOpenAI(
-        model=os.getenv("EXPLABS_MODEL", "gpt-5.6-luna"),
-        base_url=os.getenv("EXPLABS_BASE_URL", "https://api.experientiallabs.ai/v1"),
-        api_key=api_key,
-        temperature=0,
-    )
-    context = ExecutionContext(
-        application_id="live-evaluation",
-        tenant_id="isolated-test",
-        graph_id="banking-review",
-    )
-    execution = Execution(
-        context=context,
-        status=ExecutionStatus.COMPLETED,
-        started_at=datetime.now(UTC),
-    )
-    decision = Decision(
-        context=context,
-        decision_type="routing",
-        selected_action="HUMAN_REVIEW",
-        factors=[DecisionFactor(name="fraud_risk_score", value=0.91)],
-    )
-    result = await LLMExplanationEngine(
-        model,
-        enabled=True,
-        timeout=60,
-    ).explain(
-        ExplanationContext(
-            execution=execution,
-            decision=decision,
-            audience="end_user",
+    openai = pytest.importorskip("openai")
+    # A client owned by the test is closed before its event loop ends; the default
+    # one is cached per process and would leave its connections open.
+    async with openai.DefaultAsyncHttpxClient() as http_client:
+        model = langchain_openai.ChatOpenAI(
+            model=os.getenv("XAI_TEST_LLM_MODEL", "gpt-4o-mini"),
+            base_url=os.getenv("XAI_TEST_LLM_BASE_URL"),
+            api_key=api_key,
+            http_async_client=http_client,
         )
-    )
+        xai = XAIRuntime(config=XAIConfig(llm_explanation_enabled=True))
+        xai.register(ExplanationEngine, LLMExplanationEngine(model, enabled=True, timeout=60))
+        run = await xai.start_run()
+        decision = await xai.record_decision(
+            "HUMAN_REVIEW",
+            decision_type="routing",
+            factors=[DecisionFactor(name="fraud_risk_score", value=0.91)],
+            run=run,
+        )
 
-    rendered = f"{result.summary} {' '.join(result.reasons)}".lower()
-    assert result.summary
-    assert result.metadata["validated"] is True
+        explanation = await xai.explain_decision(decision, audience="end_user", run=run)
+
+    rendered = f"{explanation.summary} {' '.join(explanation.reasons)}".lower()
+    assert explanation.metadata == {"engine": "llm", "validated": True}
     assert "review" in rendered
-    assert "reasoning" not in result.metadata

@@ -1,10 +1,10 @@
 [build-system]
-requires = ["uv_build>=0.12.15,<0.13"]
+requires = ["uv_build>=0.12.23,<0.13"]
 build-backend = "uv_build"
 
 [project]
 name = "langgraph-xai"
-version = "0.1.0"
+version = "1.0.0"
 description = "A provider-neutral explainability layer for LangGraph applications."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,64 +13,71 @@ license-files = ["LICENSE"]
 authors = [
   { name = "S MUNI HARISH", email = "samamuniharish@gmail.com" },
 ]
-keywords = ["langgraph", "explainable-ai", "xai", "provenance", "ai"]
+keywords = [
+  "langgraph",
+  "langchain",
+  "agents",
+  "explainability",
+  "explainable-ai",
+  "xai",
+  "provenance",
+  "audit",
+]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 5 - Production/Stable",
+  "Framework :: AsyncIO",
   "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
   "Typing :: Typed",
 ]
 dependencies = [
-  "langchain-core>=1.6,<2",
-  "langgraph>=1.2.11,<1.3",
-  "pydantic>=2.12,<3",
+  "langchain-core>=1.6.6,<2",
+  "langgraph>=1.2.12,<2",
+  "pydantic>=2.13.5,<3",
 ]
 
 [project.optional-dependencies]
-langsmith = ["langsmith>=0.4"]
-langfuse = ["langfuse>=4"]
+langsmith = ["langsmith>=0.14.4,<1"]
+langfuse = ["langfuse>=4.16.0,<5"]
 otel = [
-  "opentelemetry-api>=1.30",
-  "opentelemetry-sdk>=1.30",
+  "opentelemetry-api>=1.45.0,<2",
+  "opentelemetry-sdk>=1.45.0,<2",
 ]
-postgres = [
-  "psycopg[binary,pool]>=3.2,<4",
-]
-llm-openai = ["langchain-openai>=1.1,<2"]
-docs = [
-  "mkdocs>=1.6,<2",
-  "mkdocs-material>=9.7,<10",
-  "mkdocstrings[python]>=1.0,<2",
-]
-all = [
-  "langfuse>=4",
-  "langchain-openai>=1.1,<2",
-  "langsmith>=0.4",
-  "opentelemetry-api>=1.30",
-  "opentelemetry-sdk>=1.30",
-  "psycopg[binary,pool]>=3.2,<4",
-]
+llm-openai = ["langchain-openai>=1.6.7,<2"]
+all = ["langgraph-xai[langfuse,langsmith,llm-openai,otel]"]
 
 [project.urls]
-Documentation = "https://github.com/smuniharish/langgraph-xai"
+Homepage = "https://github.com/smuniharish/langgraph-xai"
+Documentation = "https://langgraph-xai.readthedocs.io/"
+Changelog = "https://github.com/smuniharish/langgraph-xai/blob/master/CHANGELOG.md"
 Issues = "https://github.com/smuniharish/langgraph-xai/issues"
 Repository = "https://github.com/smuniharish/langgraph-xai"
 
 [dependency-groups]
 test = [
-  "pytest>=9",
-  "pytest-asyncio>=1.2",
-  "pytest-cov>=7",
+  "hypothesis>=6.168.3",
+  "langchain>=1.4.3,<2",
+  "pytest>=9.1.1",
+  "pytest-asyncio>=1.4.0",
+  "pytest-cov>=7.1.0",
+  "skills-ref>=0.1.1,<1",
 ]
-lint = ["ruff>=0.16"]
-types = ["pyrefly>=1.3"]
+lint = ["ruff>=0.16.10"]
+types = ["pyrefly>=1.3.2"]
 docs = [
-  "mkdocs>=1.6,<2",
-  "mkdocs-material>=9.7,<10",
-  "mkdocstrings[python]>=1.0,<2",
+  "griffe-pydantic>=1.3.1,<2",
+  "mkdocs>=1.6.1,<2",
+  "mkdocs-glightbox>=0.5.2,<1",
+  "mkdocs-material>=9.7.7,<10",
+  "mkdocstrings[python]>=1.0.6,<2",
+  "mkdocstrings-python>=2.0.9,<3",
 ]
 dev = [
   { include-group = "test" },
@@ -78,8 +85,11 @@ dev = [
   { include-group = "types" },
 ]
 examples = [
-  "deepagents>=0.4",
-  "langchain-mcp-adapters>=0.3.2",
+  "deepagents>=0.7.21,<1",
+  "langchain>=1.4.3,<2",
+  "langchain-mcp-adapters>=0.3.2,<1",
+  "psycopg[binary,pool]>=3.3.6,<4",
+  "psycopg-pool>=3.3.3,<4",
 ]
 
 [tool.uv]
@@ -88,12 +98,14 @@ default-groups = ["dev"]
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+filterwarnings = ["error"]
 markers = [
-  "integration: integration tests that may require optional dependencies",
   "live: tests requiring explicitly configured external services",
   "postgres: tests requiring XAI_TEST_POSTGRES_DSN",
   "benchmark: performance regression tests",
+  "examples: tests that execute the scripts under examples/",
 ]
 
 [tool.ruff]
@@ -103,16 +115,20 @@ target-version = "py312"
 [tool.ruff.lint]
 select = [
   "A",
+  "ARG",
   "ASYNC",
   "B",
   "C4",
+  "D",
   "DTZ",
   "E",
+  "ERA",
   "F",
   "I",
   "N",
   "PERF",
   "PIE",
+  "PT",
   "PTH",
   "RUF",
   "S",
@@ -122,23 +138,54 @@ select = [
   "UP",
   "W",
 ]
-ignore = ["S101"]
+# Google style documents constructor arguments on the class, not on __init__.
+ignore = ["D105", "D107", "S101"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"examples/**/*.py" = ["T201"]
-"tests/**/*.py" = ["S101"]
+# Docstring and unused-argument rules apply to the package; examples, scripts, and
+# tests implement LangGraph nodes, tools, and retrievers whose signatures are fixed.
+"examples/**/*.py" = ["ARG", "D", "T201"]
+"scripts/**/*.py" = ["ARG", "D", "T201"]
+"tests/**/*.py" = ["A002", "ARG", "D", "S101", "S105", "S106", "S108"]
+"langgraph-xai-skills/**/scripts/*.py" = ["ARG", "D", "T201"]
+"langgraph-xai-skills/**/assets/*.py" = ["ARG", "D"]
 "src/langgraph_xai/instrumentation/graph.py" = ["A002"]
+# LangChain calls the handlers with its full callback signatures.
+"src/langgraph_xai/instrumentation/callbacks.py" = ["ARG002"]
 
 [tool.ruff.format]
 docstring-code-format = true
 
 [tool.pyrefly]
-project-includes = ["src", "tests"]
+project-includes = ["src", "tests", "examples", "scripts", "langgraph-xai-skills"]
+search-path = ["src", ".", "examples"]
+
+# LangGraph bounds StateGraph's state type with protocols that pyrefly does not yet
+# match against TypedDict classes; the package itself never specializes StateGraph.
+[[tool.pyrefly.sub-config]]
+matches = "examples/**"
+errors = { bad-specialization = false }
+
+[[tool.pyrefly.sub-config]]
+matches = "tests/**"
+errors = { bad-specialization = false }
+
+[[tool.pyrefly.sub-config]]
+matches = "langgraph-xai-skills/**"
+errors = { bad-specialization = false }
 
 [tool.coverage.run]
 branch = true
 source = ["langgraph_xai"]
 
 [tool.coverage.report]
+fail_under = 100
 show_missing = true
 skip_covered = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "^\\s*\\.\\.\\.$",
+]

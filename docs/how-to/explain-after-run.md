@@ -1,94 +1,119 @@
-# Explain a decision after the run finishes
+# Explain a decision after the run
 
-[Quickstart](../getting-started/quickstart.md) records the decision and
-explains it *from inside the graph node that made it*, because
-`runtime.current_run` is only set while an
-[instrumented](../integrations/langgraph.md) call is in flight — it is
-`None` again the moment `ainvoke(...)` returns.
+Decisions are recorded while the graph runs, but explanations are usually
+requested afterwards: when a reviewer opens a case or a customer asks why. This
+guide shows three ways to get from a finished call to an explanation.
 
-Many real applications need the opposite shape: run the graph, return
-control to a web handler or CLI command, and only then decide whether to
-build and show an explanation (e.g. only for a `HUMAN_REVIEW` outcome).
-For that, keep your own handle on the `Run` instead of relying on
-`instrument(...)`:
+## Keep the run with `collect_runs`
+
+`collect_runs()` collects every run the runtime starts inside the `with` block.
+Each run holds its `Execution`, evidence, and decisions.
 
 ```python
-from typing import TypedDict
+with xai.collect_runs() as runs:
+    result = await graph.ainvoke({"amount": 9200.0})
+(run,) = runs
 
-from langgraph.graph import END, START, StateGraph
-
-from langgraph_xai import DecisionFactor, XAIRuntime
-from langgraph_xai.core import ExplanationContext
-
-
-class State(TypedDict, total=False):
-    query: str
-    answer: str
-
-
-runtime = XAIRuntime(graph_id="fraud-review")
-
-
-def answer(state: dict) -> dict:
-    return {"answer": f"Echo: {state['query']}"}
-
-
-builder = StateGraph(State)
-builder.add_node("answer", answer)
-builder.add_edge(START, "answer")
-builder.add_edge("answer", END)
-graph = builder.compile()
-
-# Start the run yourself instead of using runtime.instrument(...), so
-# run.execution survives past the graph call.
-run = await runtime.start_run()
-result = await graph.ainvoke({"query": "Why?"})
-
-decision = await runtime.record_decision(
-    "FINAL_RESPONSE",
-    decision_type="routing",
-    factors=[DecisionFactor(name="answer_available", value=True)],
-    run=run,
-)
-await runtime.finish_run(run)
-
-explanation = await runtime.explain(
-    ExplanationContext(execution=run.execution, decision=decision, audience="end_user")
-)
-print(result["answer"], "|", explanation.summary)
+explanation = await xai.explain_decision(run.decisions[-1], audience=Audience.AUDITOR, run=run)
 ```
 
-Real captured output, running this exact flow:
+Collection follows the async context:
+
+- Runs started by tasks spawned inside the block are included, for example by
+  `asyncio.gather` or `abatch`.
+- Runs started concurrently elsewhere are not.
+- An inner `collect_runs` block takes precedence over an outer one.
+
+A batch call collects one run per input:
+
+```python
+with xai.collect_runs() as runs:
+    results = await graph.abatch([{"amount": 120.0}, {"amount": 9200.0}])
+assert len(runs) == 2
+```
+
+## Record and explain outside a graph
+
+Work that does not go through an instrumented graph, such as a batch scoring
+job or a rules engine, can still record evidence and decisions. Start and
+finish the run yourself, and pass it explicitly:
+
+```python
+run = await xai.start_run({"metadata": {"trace_id": "job-42"}})
+score = await xai.record_evidence(EvidenceType.TOOL_RESULT, summary="Score 0.91.", run=run)
+decision = await xai.record_decision("HUMAN_REVIEW", evidence_ids=[score.id], run=run)
+await xai.finish_run(run)
+
+explanation = await xai.explain_decision(decision, run=run)
+```
+
+Do not combine this with an instrumented call for the same work. The
+instrumented call starts its own run.
+
+## Explain later from persisted records
+
+Runs live in memory. To explain a decision in another process or days later,
+persist two things:
+
+- **Executions.** These are written to the `ProvenanceStore`. In production,
+  use a database store, such as the
+  [PostgreSQL store example](../examples/postgres-store.md).
+- **Evidence and decisions.** These are delivered to [plugins](../architecture/plugins.md),
+  not to the store.
+
+Later, rebuild an `ExplanationContext` and call `explain`:
+
+```python
+class Archive:
+    """An XAIPlugin that keeps every evidence and decision record (use your database)."""
+
+    def __init__(self) -> None:
+        self.artifacts = {}
+
+    async def record(self, artifact) -> None:
+        self.artifacts[artifact.id] = artifact
+
+    async def flush(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
+
+
+archive = Archive()
+xai = XAIRuntime(application_id="payments", tenant_id="acme-bank", plugins=(archive,))
+```
+
+```python
+async def explain_later(run_id) -> None:
+    store = xai.registry.require(ProvenanceStore)
+    query = StoreFilter(
+        application_id="payments", tenant_id="acme-bank", run_id=run_id, item_type=Execution
+    )
+    (execution,) = [record async for record in store.query(query)]
+    decision = next(
+        item
+        for item in archive.artifacts.values()
+        if isinstance(item, Decision) and item.context.run_id == execution.context.run_id
+    )
+    evidence = [archive.artifacts[evidence_id] for evidence_id in decision.evidence_ids]
+    explanation = await xai.explain(
+        ExplanationContext(
+            execution=execution, decision=decision, evidence=evidence, audience=Audience.AUDITOR
+        )
+    )
+    print(explanation.summary)
+    print([item.label for item in explanation.contributing_factors])
+```
+
+Output:
 
 ```text
-Echo: Why? | The end_user explanation is based on the selected action 'FINAL_RESPONSE'.
+The routing decision selected 'HUMAN_REVIEW'.
+['Fraud score 0.91.']
 ```
 
-## What you trade away
-
-Calling the raw `graph.ainvoke(...)` here — instead of
-`runtime.instrument(graph).ainvoke(...)` — means node-level tool calls and
-state transitions are **not** captured automatically for this run; only
-the top-level `Execution` and whatever you explicitly record (via
-`record_decision`, `record_evidence`, `record_tool`, …) are. `instrument(...)`
-and this manual `start_run`/`finish_run` pattern are not composable for
-the *same* call: passing an already-active `Run` into an instrumented
-`ainvoke(...)` causes it to detect the surrounding run and skip attaching
-its own capture callback, to avoid double-recording a call that is nested
-inside a larger instrumented one (e.g. a subgraph invoked by a node).
-
-If you need both full per-node capture *and* a post-hoc decision, record
-the decision and evidence from inside the node that owns them (as in
-[Quickstart](../getting-started/quickstart.md)) — that is the pattern
-`runtime.instrument(...)` is designed around — and reserve this manual
-pattern for graphs, or parts of your pipeline, where you are not relying
-on automatic per-node capture in the first place.
-
-## No canonical model is hand-built here either
-
-Note what this page does *not* do: it never constructs `Execution`,
-`Decision`, or `ProvenanceLink` directly. `record_decision(...)` builds and
-persists the `Decision`; `run.execution` is the real, live `Execution` the
-runtime already created in `start_run(...)`. The only object assembled by
-hand is `ExplanationContext` — a reference to already-recorded objects
-plus an audience, not a re-derivation of data recorded elsewhere.
+`explain` applies the same policy, attribution, and engine as
+`explain_decision`. Given the same records, it produces the same explanation.
+To mirror `explain_decision` exactly, also include the evidence referenced by
+the decision's factors.

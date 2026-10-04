@@ -1,65 +1,75 @@
-# deepagents (real deep-agent + real LLM)
+# deepagents
 
-[`deepagents`](https://github.com/langchain-ai/deepagents) builds a
-"deep agent" — planning, filesystem, and subagent middleware layered on top
-of `langchain.agents.create_agent` — but the result it returns is still an
-ordinary compiled LangGraph `StateGraph`. This page proves xgraph needs zero
-deepagents-specific code to instrument one.
-
-Source: [`examples/deepagents_realtime.py`](https://github.com/samamuniharish/langgraph-xai/blob/main/examples/deepagents_realtime.py).
-
-```python
-agent = create_deep_agent(
-    model=ChatOpenAI(
-        base_url="https://api.experientiallabs.ai/v1",
-        api_key=os.environ["EXPLABS_API_KEY"],
-        model="gpt-5.6-luna",
-    ),
-    tools=[word_count],
-    system_prompt="You are a concise research assistant. Use the word_count "
-    "tool on any text you are given, then report the count.",
-)
-
-runtime = XAIRuntime(graph_id="deepagents-word-counter")
-instrumented = runtime.instrument(agent)  # <- the entire integration
-result = await instrumented.ainvoke({"messages": [...]})
-```
+[`deepagents`](https://github.com/langchain-ai/deepagents) adds planning,
+filesystem, and sub-agent middleware on top of `create_agent`. The result is
+still a compiled LangGraph graph, so the same `xai.instrument` call captures the
+whole run. Source:
+[`examples/deepagents_agent.py`](https://github.com/smuniharish/langgraph-xai/blob/master/examples/deepagents_agent.py).
 
 ```bash
-uv run --system-certs python examples/deepagents_realtime.py
+export OPENAI_API_KEY=...
+uv run --group examples python examples/deepagents_agent.py
 ```
 
-## Real captured output
-
-```text
---- Final agent message ---
-4 words.
-
---- 8 records captured across one deepagents run ---
-Execution
-execution.started
-state.transition
-state.transition
-tool.execution
-state.transition
-state.transition
-execution.completed
-
-Distinct run_ids: {'4dafd1f1-3430-44ef-ba22-350dd481b62e'}
-```
-
-A single `run_id` covers the deep agent's internal planning/state middleware
-*and* its real tool call (`word_count`) — confirmed by the script's own
-assertion, not just visual inspection:
+## The agent
 
 ```python
-assert len(run_ids) == 1, "the whole deep-agent run (including any subagent work) must correlate"
+@tool
+def word_count(text: str) -> int:
+    """Count the words in a piece of text."""
+    return len(text.split())
+
+
+agent = create_deep_agent(
+    model=chat_model(),
+    tools=[word_count],
+    system_prompt=(
+        "You are a concise research assistant. Use the word_count tool on any text "
+        "you are given, then report the count."
+    ),
+)
+
+with xai.collect_runs() as runs:
+    result = await xai.instrument(agent).ainvoke(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Count the words in: explainability makes agents accountable.",
+                }
+            ]
+        }
+    )
 ```
 
-## Why this matters
+## Output
 
-deepagents did not exist when xgraph's instrumentation layer was designed.
-It works anyway, because `InstrumentedGraph` only depends on the public
-LangChain Runnable/callback surface — not on any framework-specific
-internals — which is the same guarantee demonstrated for MCP tools in
-[MCP tools](mcp-tools.md).
+Real output from a live OpenAI-compatible chat model:
+
+```text
+Agent: 4 words.
+
+--- Captured for one run ---
+{
+  "run_id": "7ea8967e-d86c-4eec-b612-0f60571a1c8b",
+  "status": "completed",
+  "nodes": {
+    "PatchToolCallsMiddleware.before_agent": 1,
+    "model": 2,
+    "tools": 1
+  },
+  "tools": [
+    "word_count: succeeded"
+  ],
+  "state_transitions": 3
+}
+```
+
+## What to notice
+
+- **Middleware nodes are real graph nodes.** `PatchToolCallsMiddleware.before_agent`
+  is a node that deepagents adds. It is recorded like any other node.
+- **The model ran twice.** It requested the tool, then answered. Each model turn
+  is a node execution, and the tool call between them is a tool execution.
+- **No framework-specific code.** Sub-agents spawned by deepagents run inside
+  the same call, so their nodes and tools join the same run.

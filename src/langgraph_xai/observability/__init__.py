@@ -1,22 +1,22 @@
-"""Optional observability provider implementations."""
+"""Observability provider implementations."""
 
+from .base import ObservabilityAdapter, correlation_fields, event_payload
 from .errors import AdapterClosedError, ObservabilityAdapterError, OptionalDependencyError
-from .langfuse import LangfuseObservability, LangfuseProvider
-from .langsmith import LangSmithObservability, LangSmithProvider
-from .noop import NoOpObservability, NoOpProvider
-from .otel import OpenTelemetryObservability, OpenTelemetryProvider, OTelObservability
+from .langfuse import LangfuseObservability, langfuse_trace_context
+from .langsmith import LangSmithObservability
+from .noop import NoOpObservability
+from .otel import OpenTelemetryObservability
 
 __all__ = [
     "AdapterClosedError",
     "LangSmithObservability",
-    "LangSmithProvider",
     "LangfuseObservability",
-    "LangfuseProvider",
     "NoOpObservability",
-    "NoOpProvider",
-    "OTelObservability",
+    "ObservabilityAdapter",
     "ObservabilityAdapterError",
     "OpenTelemetryObservability",
-    "OpenTelemetryProvider",
     "OptionalDependencyError",
+    "correlation_fields",
+    "event_payload",
+    "langfuse_trace_context",
 ]

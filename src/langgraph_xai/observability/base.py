@@ -1,88 +1,108 @@
-"""Shared implementation details for canonical-event observability adapters."""
+"""Shared implementation for canonical-event observability adapters."""
 
 from __future__ import annotations
 
-import inspect
+import threading
 from abc import ABC, abstractmethod
-from asyncio import Lock
+from collections import OrderedDict
+from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from .errors import AdapterClosedError, ObservabilityAdapterError
+from .errors import AdapterClosedError, ObservabilityAdapterError, OptionalDependencyError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
     from uuid import UUID
 
     from ..core.models import CanonicalEvent
 
-type EmitResult = Any
-
-
-async def maybe_await(value: EmitResult) -> EmitResult:
-    """Await SDK methods regardless of whether a fake or SDK is sync or async."""
-    if inspect.isawaitable(value):
-        return await value
-    return value
+DEFAULT_DEDUPLICATION_WINDOW = 4096
 
 
 def event_payload(event: CanonicalEvent) -> dict[str, Any]:
-    """Serialize a canonical event without losing its correlation metadata."""
+    """Serialize a canonical event to JSON-compatible data."""
     return event.model_dump(mode="json")
 
 
 def correlation_fields(event: CanonicalEvent) -> dict[str, str]:
-    """Return non-empty correlation IDs using stable, provider-neutral names."""
+    """Return the ``xai.*`` identifiers that correlate an event across systems.
+
+    Always includes ``xai.event_id`` (the event's ``id``), ``xai.event_type``,
+    ``xai.application_id``, ``xai.tenant_id``, ``xai.graph_id``, and
+    ``xai.run_id``; adds ``xai.thread_id``, ``xai.trace_id``, and
+    ``xai.checkpoint_id`` when the event's context carries them.
+    """
     context = event.context
-    fields: dict[str, str] = {
-        "xai.event_id": str(event.event_id),
+    fields = {
+        "xai.event_id": str(event.id),
+        "xai.event_type": event.event_type,
+        "xai.application_id": context.application_id,
+        "xai.tenant_id": context.tenant_id,
+        "xai.graph_id": context.graph_id,
         "xai.run_id": str(context.run_id),
     }
-    for name in ("trace_id", "span_id", "parent_id", "checkpoint_id"):
-        value = getattr(context, name)
+    for name, value in (
+        ("thread_id", context.thread_id),
+        ("trace_id", context.trace_id),
+        ("checkpoint_id", context.checkpoint_id),
+    ):
         if value is not None:
             fields[f"xai.{name}"] = value
     return fields
 
 
 class ObservabilityAdapter(ABC):
-    """Base class implementing the async provider protocol safely."""
+    """Base class implementing the `ObservabilityProvider` lifecycle safely.
 
-    def __init__(self) -> None:
+    Subclasses implement `_emit` (and optionally `_flush`/`_close`). The base
+    class rejects use after `close`, wraps backend errors in
+    `ObservabilityAdapterError`, and drops duplicate events: an event whose
+    ``id`` was emitted within the last ``deduplication_window`` events is
+    skipped (``0`` disables deduplication). A failed emit is forgotten, so the
+    same event can be retried. Emits are not serialized, so concurrent events
+    reach the backend concurrently.
+    """
+
+    def __init__(self, *, deduplication_window: int = DEFAULT_DEDUPLICATION_WINDOW) -> None:
+        if deduplication_window < 0:
+            raise ValueError("deduplication_window must not be negative")
         self._closed = False
-        self._seen_event_ids: set[UUID] = set()
-        self._lock = Lock()
+        self._window = deduplication_window
+        self._seen: OrderedDict[UUID, None] = OrderedDict()
+        self._lock = threading.Lock()
 
     async def emit(self, event: CanonicalEvent) -> None:
+        """Send ``event`` once, unless it was already emitted recently."""
         if self._closed:
             raise AdapterClosedError(f"{type(self).__name__} is closed")
-        async with self._lock:
-            if event.event_id in self._seen_event_ids:
-                return
-            try:
-                await self._emit(event)
-            except ObservabilityAdapterError:
-                raise
-            except Exception as exc:
+        if not self._claim(event.id):
+            return
+        try:
+            await self._emit(event)
+        except BaseException as exc:
+            self._release(event.id)
+            if isinstance(exc, Exception) and not isinstance(exc, ObservabilityAdapterError):
                 raise ObservabilityAdapterError(
                     f"{type(self).__name__} failed to emit {event.event_type}"
                 ) from exc
-            self._seen_event_ids.add(event.event_id)
+            raise
 
     async def flush(self) -> None:
+        """Deliver any events the backend has buffered."""
         if self._closed:
             raise AdapterClosedError(f"{type(self).__name__} is closed")
         try:
-            await maybe_await(self._flush())
+            await self._flush()
         except ObservabilityAdapterError:
             raise
         except Exception as exc:
             raise ObservabilityAdapterError(f"{type(self).__name__} failed to flush") from exc
 
     async def close(self) -> None:
+        """Release backend resources; idempotent."""
         if self._closed:
             return
         try:
-            await maybe_await(self._close())
+            await self._close()
         except ObservabilityAdapterError:
             raise
         except Exception as exc:
@@ -94,29 +114,33 @@ class ObservabilityAdapter(ABC):
     async def _emit(self, event: CanonicalEvent) -> None:
         """Send one event to the concrete backend."""
 
-    def _flush(self) -> Awaitable[None] | None:
-        return None
+    async def _flush(self) -> None:  # noqa: B027 - optional hook, no-op by default
+        """Flush the backend; no-op by default."""
 
-    def _close(self) -> Awaitable[None] | None:
-        return None
+    async def _close(self) -> None:  # noqa: B027 - optional hook, no-op by default
+        """Close the backend; no-op by default."""
+
+    def _claim(self, event_id: UUID) -> bool:
+        if not self._window:
+            return True
+        with self._lock:
+            if event_id in self._seen:
+                return False
+            self._seen[event_id] = None
+            if len(self._seen) > self._window:
+                self._seen.popitem(last=False)
+            return True
+
+    def _release(self, event_id: UUID) -> None:
+        with self._lock:
+            self._seen.pop(event_id, None)
 
 
-def optional_import(module: str, package: str) -> Any:
-    """Import an optional SDK only when its adapter is instantiated."""
+def optional_import(module: str, extra: str) -> Any:
+    """Import an optional SDK, raising `OptionalDependencyError` naming the extra to install."""
     try:
-        return __import__(module, fromlist=["*"])
+        return import_module(module)
     except ImportError as exc:
-        from .errors import OptionalDependencyError
-
         raise OptionalDependencyError(
-            f"{package} observability requires the optional dependency {package!r}"
+            f"this adapter requires the {extra!r} extra: pip install 'langgraph-xai[{extra}]'"
         ) from exc
-
-
-def callable_or_error(client: Any, name: str) -> Callable[..., Any]:
-    method = getattr(client, name, None)
-    if not callable(method):
-        raise ObservabilityAdapterError(
-            f"{type(client).__name__} does not provide required method {name}()"
-        )
-    return method

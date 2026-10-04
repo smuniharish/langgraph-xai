@@ -1,7 +1,13 @@
 flowchart LR
-    App[Application] --> Graph[LangGraph execution]
-    Graph --> LangSmith[LangSmith tracing and evaluation]
-    Graph --> Core[Provider-neutral artifacts]
-    Core --> Policy[Disclosure policy]
-    Policy --> Correlation[Approved IDs or summaries]
-    Correlation -. optional adapter .-> LangSmith
+    classDef app fill:#ecf8f1,stroke:#2f8f5b,color:#0f2547
+    classDef trace fill:#fff7e8,stroke:#c98a12,color:#0f2547
+    classDef xai fill:#eef4ff,stroke:#3567c7,color:#0f2547
+
+    app["LangGraph application"]:::app
+    runs["<b>LangSmith tracing</b><br/>what ran: inputs, outputs,<br/>latency, tokens, evaluations"]:::trace
+    artifacts["<b>langgraph-xai</b><br/>why it was decided: evidence,<br/>decisions, provenance, attribution"]:::xai
+    explanations["Audience-specific explanations<br/>under a disclosure policy"]:::xai
+
+    app --> runs
+    app --> artifacts --> explanations
+    artifacts -. "LangSmithObservability<br/>(optional)" .-> runs

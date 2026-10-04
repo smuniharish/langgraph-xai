@@ -25,16 +25,19 @@ it helps reviewers understand and validate your change quickly.
 - [ ] New/changed public behavior is covered by tests.
 - [ ] `uv run ruff check .` and `uv run ruff format --check .` pass.
 - [ ] `uv run pyrefly check` passes.
-- [ ] `uv run pytest -m "not live and not postgres"` passes.
+- [ ] `uv run pytest --cov=langgraph_xai --cov-branch` passes with 100% coverage.
+- [ ] `uv run mkdocs build --strict` passes, and diagrams were re-rendered if
+      a `diagrams/*.mmd` source changed.
 - [ ] Relevant docs under `docs/` were updated (if this changes public API,
       configuration, or behavior).
 - [ ] `CHANGELOG.md` has an entry under `[Unreleased]` (if this is a
       user-visible change).
 
-## Architectural notes (if applicable)
+## Capture and disclosure impact
 
 <!--
-If this PR adds a new provider, storage backend, attribution/explanation
-engine, or capability: confirm it is wired through an existing Protocol and
-the plugin registry, and that XAIRuntime itself did not need to change.
+Does this change what is captured, stored, exported to a tracing backend, or
+disclosed in an explanation? Describe the effect, or write "None".
+New providers should implement an existing capability contract (the
+ProvenanceStore base class or a protocol) without changes to XAIRuntime.
 -->

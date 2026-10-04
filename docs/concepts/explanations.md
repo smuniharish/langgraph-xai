@@ -1,72 +1,113 @@
 # Explanations
 
-## Kid-level view
-
-An explanation is a readable summary assembled from approved records and
-honest about what is unknown.
-
-## Production view
-
-Explanation assembly consumes canonical artifacts, applies disclosure policy,
-preserves uncertainty and attribution limitations, and identifies its schema
-and renderer version. An optional LLM may phrase approved material only; it
-must not become an implicit recorder of private reasoning.
-
-## Why and architecture
-
-Separating assembly from capture supports deterministic tests, multiple
-audiences, and safe redaction at the final boundary.
-
-## Real example: input and output
+An `Explanation` describes one decision to one audience. It is built from
+recorded facts only, filtered by the audience's exposure policy, and it says
+what it withheld.
 
 ```python
-explanation = await runtime.explain(
-    ExplanationContext(
-        execution=execution,
-        decision=decision,
-        evidence=[fraud_score_evidence, threshold_evidence],
-        provenance=links,
-        attribution=attribution,
-        audience="auditor",
-    )
-)
+explanation = await xai.explain_decision(decision, audience=Audience.AUDITOR, run=run)
 ```
 
-Real captured output, produced by
-[`examples/canonical_model_gallery.py`](https://github.com/samamuniharish/langgraph-xai/blob/main/examples/canonical_model_gallery.py)
-(fields trimmed to the ones unique to this concept — see
-[the full, untrimmed payload](../examples/full-explanation.md) for every
-field):
+## Fields
+
+| Field | Contains |
+| --- | --- |
+| `audience` | Who it is for: `developer` (default), `auditor`, `business`, `end_user`, or your own string. |
+| `summary` | One sentence naming the decision and the selected action. |
+| `reasons` | The selected action, the alternatives considered, factor values, and the decision's confidence. |
+| `contributing_factors` | The [attribution](attribution.md) contributions, ranked by absolute score. |
+| `supporting_evidence` | References to the decision's [evidence](evidence.md). |
+| `disclosure` | Why sections were withheld, plus the policy's own reason, if any. |
+| `metadata` | The engine that produced it, e.g. `{"engine": "structured"}`. |
+
+## How an explanation is built
+
+![How explain_decision builds an explanation](../assets/diagrams/explanation-flow.png)
+
+1. `explain_decision` gathers the decision's run and the evidence it references
+   into an `ExplanationContext`. Use `explain(context)` to build the context
+   yourself.
+2. If the registered engine needs an LLM, the runtime checks that
+   `XAIConfig.llm_explanation_enabled` is set *before* any other work.
+3. The registered `PolicyProvider` evaluates exposure (`PolicyAction.EXPOSE`)
+   for the audience.
+4. The `AttributionEngine` scores the decision, unless the context already
+   carries an attribution.
+5. The `ExplanationEngine` renders the explanation and empties every section
+   the policy withholds.
+
+If the policy, the attribution, or the engine fails, `XAIInstrumentationError`
+is raised in **every** failure mode. A partial or unfiltered explanation is
+never returned.
+
+## Example: two audiences, one decision
+
+The [fraud review example](../examples/full-explanation.md) registers a policy
+that shows auditors everything and withholds attribution and evidence from end
+users. The auditor sees the full picture (trimmed for readability: schema
+versions, metadata, and each contribution's evidence IDs and rationale are
+omitted):
 
 ```json
 {
   "audience": "auditor",
-  "summary": "The auditor explanation is based on the selected action 'HUMAN_REVIEW'.",
+  "summary": "The routing decision selected 'HUMAN_REVIEW'.",
   "reasons": [
     "Selected action: HUMAN_REVIEW.",
+    "Alternatives considered: AUTO_APPROVE, DECLINE.",
     "Factor fraud_risk_score was 0.91.",
-    "Factor review_threshold was 0.8."
+    "Factor review_threshold was 0.8.",
+    "Decision confidence: 0.93."
   ],
   "supporting_evidence": [
-    { "evidence_id": "e42ff48a-9ecb-41e9-ba82-4a3d8cda4064", "relationship": "supported_by" },
-    { "evidence_id": "1e74b6d9-dc1e-4be2-8d75-9b5395b680f3", "relationship": "supported_by" }
+    {"evidence_id": "c5524467-78fa-4128-ade6-b6cf9944a995", "relationship": "supported_by"},
+    {"evidence_id": "f3b1e032-a3c5-45a4-b125-81ef94d4f877", "relationship": "supported_by"}
   ],
-  "contributing_factors": ["... same shape as Attribution.contributions, sorted by score ..."],
-  "disclosure": ["Private memory and raw content are withheld by default."],
-  "metadata": { "engine": "structured" }
+  "contributing_factors": [
+    {"factor_id": "fraud_risk_score", "factor_type": "decision_factor", "score": 0.4, "label": "fraud_risk_score"},
+    {"factor_id": "c5524467-78fa-4128-ade6-b6cf9944a995", "factor_type": "policy", "score": 0.2669514148424987, "label": "Policy FR-7 requires human review above a 0.80 risk score."},
+    {"factor_id": "f3b1e032-a3c5-45a4-b125-81ef94d4f877", "factor_type": "tool_result", "score": 0.23304858515750135, "label": "Fraud model scored the transaction 0.91."},
+    {"factor_id": "review_threshold", "factor_type": "decision_factor", "score": 0.1, "label": "review_threshold"}
+  ],
+  "disclosure": [],
+  "metadata": {"engine": "structured"}
 }
 ```
 
-Compare this to the `end_user` policy decision on the
-[Policies](policies.md) page: the same underlying `Decision`/`Evidence`
-produces a **different** `Explanation` per audience, because
-`runtime.explain(...)` re-applies the registered `PolicyProvider` every call
-— see the [disclosure-policy matrix](../examples/disclosure-matrix.md) for
-all 16 real audience x policy x engine combinations side by side.
+The customer sees the outcome without internal scores, and is told what was
+withheld:
 
-## Mistakes to avoid
+```json
+{
+  "audience": "end_user",
+  "summary": "The routing decision selected 'HUMAN_REVIEW'.",
+  "reasons": [
+    "Selected action: HUMAN_REVIEW.",
+    "Alternatives considered: AUTO_APPROVE, DECLINE.",
+    "Decision confidence: 0.93."
+  ],
+  "supporting_evidence": [],
+  "contributing_factors": [],
+  "disclosure": [
+    "Contributing factors are withheld by policy.",
+    "Supporting evidence is withheld by policy.",
+    "Customers receive the outcome and reasons only."
+  ],
+  "metadata": {"engine": "structured"}
+}
+```
 
-Render “manual review was selected under rule R using sources A and B.” Avoid
-inventing rationale, exposing raw prompts, or treating fluent prose as evidence.
+Withholding `contributing_factors` also removes factor values from `reasons`,
+so a score withheld from one section cannot reappear in another.
 
+## Engines
 
+| Engine | Behavior |
+| --- | --- |
+| `StructuredExplanationEngine` (default) | Deterministic. Builds every section from recorded fields and never calls a model. The same records always produce the same explanation. |
+| `LLMExplanationEngine` | Rephrases the summary and reasons in natural language with a LangChain chat model you inject. The model receives only facts the policy allows, and its reply must match a strict JSON schema. Requires `enabled=True` and `XAIConfig(llm_explanation_enabled=True)`. See [LLM-phrased explanations](../how-to/llm-explanations.md). |
+
+To render explanations differently, for example in another language or as
+HTML, implement the `ExplanationEngine` protocol: a `requires_llm` attribute
+and one `async def explain(context)`. Use the policy decisions in
+`context.policies` to decide what to show.

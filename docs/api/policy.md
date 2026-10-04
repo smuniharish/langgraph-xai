@@ -1,53 +1,28 @@
-# Policy providers
+# Policies
 
-## `DefaultCapturePolicy`
-
-Registered automatically. Allows every canonical event to be captured after
-`sanitize_mapping`/`sanitize_value` have replaced obvious credential-shaped
-keys (`api_key`, `password`, `token`, `secret`, `authorization`, `cookie`,
-…) with `"[not captured]"`. This is a minimal safety net against accidental
-secret capture, **not** a PII-detection or general redaction engine — see
-[Concepts: Policies](../concepts/policies.md) for that boundary.
-
-## `DefaultPolicyProvider`
-
-Registered automatically. On `evaluate(context, PolicyAction.EXPOSE)`,
-denies `private_memory`, `raw_content`, and `content_reference` for every
-audience — see the real, captured decision on
-[Concepts: Policies](../concepts/policies.md) and the full
-audience x policy matrix on
-[the disclosure-matrix example](../examples/disclosure-matrix.md).
-
-## Writing your own
+The default capture and exposure policies, and the redaction helpers applied to
+every free-form value. See [Policies](../concepts/policies.md) for how they fit
+together and how to write your own.
 
 ```python
-from langgraph_xai.core.models import PolicyAction, PolicyDecision
-from langgraph_xai.core.protocols import PolicyProvider
+from langgraph_xai.policy import REDACTED, is_sensitive_key, sanitize_value
 
-
-class AuditorFullDisclosurePolicy:
-    async def evaluate(self, context, action):
-        denied = set() if context.audience == "auditor" else {"raw_content"}
-        return PolicyDecision(
-            context=context.execution.context,
-            policy_id="auditor-full-disclosure",
-            action=action,
-            allowed=True,
-            audience=context.audience,
-            denied_fields=denied,
-            reason="Auditors receive full disclosure; other audiences do not.",
-        )
-
-
-runtime.register(PolicyProvider, AuditorFullDisclosurePolicy())
+assert is_sensitive_key("x-api-key")
+assert sanitize_value({"Authorization": "Bearer abc"}) == {"Authorization": REDACTED}
 ```
 
-## Reference
+## Default policies
 
-::: langgraph_xai.policy.DefaultCapturePolicy
+::: langgraph_xai.policy.defaults.DefaultCapturePolicy
 
-::: langgraph_xai.policy.DefaultPolicyProvider
+::: langgraph_xai.policy.defaults.DefaultPolicyProvider
 
-::: langgraph_xai.policy.sanitize_value
+## Redaction
 
-::: langgraph_xai.policy.sanitize_mapping
+::: langgraph_xai.policy.defaults.sanitize_value
+
+::: langgraph_xai.policy.defaults.sanitize_mapping
+
+::: langgraph_xai.policy.defaults.is_sensitive_key
+
+::: langgraph_xai.policy.defaults.REDACTED

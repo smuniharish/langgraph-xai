@@ -1,4 +1,14 @@
-"""Run a repeatable live LLM explanation evaluation and write JSON/Markdown reports."""
+"""Run a repeatable live evaluation of LLM explanations and write JSON/Markdown reports.
+
+Each scenario explains a recorded decision through ``LLMExplanationEngine`` and checks
+schema validity, expected-term grounding, and that policy-withheld facts stay out of
+the text. Uses the standard OpenAI variables: ``OPENAI_API_KEY`` (required) and,
+optionally, ``OPENAI_BASE_URL`` for an OpenAI-compatible endpoint and ``OPENAI_MODEL``.
+
+Run with:
+
+    uv run --extra llm-openai python scripts/run-live-llm-evaluation.py
+"""
 
 from __future__ import annotations
 
@@ -11,6 +21,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypedDict
 
 from langchain_openai import ChatOpenAI
 
@@ -25,6 +36,34 @@ from langgraph_xai.core import (
     PolicyDecision,
 )
 from langgraph_xai.explanation import LLMExplanationEngine
+
+
+class Case(TypedDict):
+    scenario: str
+    latency_ms: float
+    schema_valid: bool
+    grounded_rubric_pass: bool
+    policy_safe: bool
+    error: str | None
+
+
+class Latency(TypedDict):
+    minimum: float | None
+    median: float | None
+    maximum: float | None
+
+
+class Report(TypedDict):
+    generated_at: str
+    model: str
+    base_url: str | None
+    scenario_count: int
+    schema_success_rate: float
+    grounded_rubric_pass_rate: float
+    policy_safety_pass_rate: float
+    latency_ms: Latency
+    cases: list[Case]
+    methodology: str
 
 
 @dataclass(frozen=True)
@@ -106,20 +145,14 @@ def make_context(scenario: Scenario) -> ExplanationContext:
 
 async def evaluate(
     model_name: str,
-    base_url: str,
+    base_url: str | None,
     timeout_seconds: float,
-) -> dict[str, object]:
-    api_key = os.getenv("EXPLABS_API_KEY")
-    if not api_key:
-        raise RuntimeError("Set EXPLABS_API_KEY in the process environment")
-    model = ChatOpenAI(
-        model=model_name,
-        base_url=base_url,
-        api_key=api_key,
-        temperature=0,
-    )
+) -> Report:
+    if not os.getenv("OPENAI_API_KEY"):
+        raise SystemExit("Set OPENAI_API_KEY in the process environment.")
+    model = ChatOpenAI(model=model_name, base_url=base_url, temperature=0)
     engine = LLMExplanationEngine(model, enabled=True, timeout=timeout_seconds)
-    cases: list[dict[str, object]] = []
+    cases: list[Case] = []
     latencies: list[float] = []
     for scenario in SCENARIOS:
         started = time.perf_counter()
@@ -160,7 +193,7 @@ async def evaluate(
         "model": model_name,
         "base_url": base_url,
         "scenario_count": len(cases),
-        "schema_success_rate": sum(bool(case["schema_valid"]) for case in cases) / len(cases),
+        "schema_success_rate": sum(case["schema_valid"] for case in cases) / len(cases),
         "grounded_rubric_pass_rate": len(passed) / len(cases),
         "policy_safety_pass_rate": len(policy_safe) / len(cases),
         "latency_ms": {
@@ -176,18 +209,17 @@ async def evaluate(
     }
 
 
-def markdown(report: dict[str, object]) -> str:
+def markdown(report: Report) -> str:
     latency = report["latency_ms"]
-    assert isinstance(latency, dict)
     lines = [
         "# Live LLM explanation evaluation",
         "",
         f"- Model: `{report['model']}`",
-        f"- Endpoint: `{report['base_url']}`",
+        f"- Endpoint: `{report['base_url'] or 'OpenAI default'}`",
         f"- Scenarios: {report['scenario_count']}",
-        f"- Schema success: {float(report['schema_success_rate']):.1%}",
-        f"- Grounded rubric pass: {float(report['grounded_rubric_pass_rate']):.1%}",
-        f"- Policy safety pass: {float(report['policy_safety_pass_rate']):.1%}",
+        f"- Schema success: {report['schema_success_rate']:.1%}",
+        f"- Grounded rubric pass: {report['grounded_rubric_pass_rate']:.1%}",
+        f"- Policy safety pass: {report['policy_safety_pass_rate']:.1%}",
         (
             "- Latency (min / median / max): "
             f"{latency['minimum']} / {latency['median']} / {latency['maximum']} ms"
@@ -195,32 +227,25 @@ def markdown(report: dict[str, object]) -> str:
         "",
         "## Methodology",
         "",
-        str(report["methodology"]),
+        report["methodology"],
         "",
         "## Scenario results",
         "",
         "| Scenario | Latency ms | Schema | Grounded rubric | Policy safe | Error |",
         "| --- | ---: | --- | --- | --- | --- |",
     ]
-    cases = report["cases"]
-    assert isinstance(cases, list)
-    for case in cases:
-        assert isinstance(case, dict)
-        lines.append(
-            f"| {case['scenario']} | {case['latency_ms']} | {case['schema_valid']} | "
-            f"{case['grounded_rubric_pass']} | {case['policy_safe']} | "
-            f"{case['error'] or ''} |"
-        )
+    lines.extend(
+        f"| {case['scenario']} | {case['latency_ms']} | {case['schema_valid']} | "
+        f"{case['grounded_rubric_pass']} | {case['policy_safe']} | {case['error'] or ''} |"
+        for case in report["cases"]
+    )
     return "\n".join(lines) + "\n"
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default=os.getenv("EXPLABS_MODEL", "gpt-5.6-luna"))
-    parser.add_argument(
-        "--base-url",
-        default=os.getenv("EXPLABS_BASE_URL", "https://api.experientiallabs.ai/v1"),
-    )
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--model", default=os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+    parser.add_argument("--base-url", default=os.getenv("OPENAI_BASE_URL"))
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--output", type=Path, default=Path("reports/live-llm-evaluation"))
     args = parser.parse_args()
@@ -231,6 +256,7 @@ async def main() -> None:
         encoding="utf-8",
     )
     args.output.with_suffix(".md").write_text(markdown(report), encoding="utf-8")
+    print(markdown(report))
 
 
 if __name__ == "__main__":
